@@ -1316,7 +1316,6 @@ class FusionContractorArrayContext(
                 key_builder=PytatoKeyBuilder(),
                 safe_sync=False)
 
->>>>>>> 0224ca91be3777b4a9c68abd5a81dc880cf985f5
     def transform_dag(self, dag):
         import pytato as pt
 
