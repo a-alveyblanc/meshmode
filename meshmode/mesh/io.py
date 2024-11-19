@@ -23,8 +23,16 @@ THE SOFTWARE.
 import numpy as np
 
 from gmsh_interop.reader import (  # noqa: F401
-    FileSource, GmshMeshReceiverBase, GmshSimplexElementBase,
-    GmshTensorProductElementBase, LiteralSource, ScriptSource, ScriptWithFilesSource)
+    FileSource,
+    GmshMeshReceiverBase,
+    GmshSimplexElementBase,
+    GmshTensorProductElementBase,
+    LiteralSource,
+    ScriptSource,
+    ScriptWithFilesSource,
+)
+
+from meshmode.mesh import Mesh
 
 
 __doc__ = """
@@ -94,7 +102,7 @@ class GmshMeshReceiver(GmshMeshReceiverBase):
     def finalize_elements(self):
         pass
 
-    # May raise ValueError if try to add different tags with the same name
+    # May raise ValueError if called multiple times with the same name
     def add_tag(self, name, index, dimension):
         if self.tags is None:
             self.tags = []
@@ -127,16 +135,9 @@ class GmshMeshReceiver(GmshMeshReceiverBase):
 
         mesh_bulk_dim = max(el_type.dimensions for el_type in el_type_hist)
 
-        # {{{ build vertex numbering
-
         # map set of face vertex indices to list of tags associated to face
         face_vertex_indices_to_tags = {}
-        vertex_gmsh_index_to_mine = {}
         for element, el_vertices in enumerate(self.element_vertices):
-            for gmsh_vertex_nr in el_vertices:
-                if gmsh_vertex_nr not in vertex_gmsh_index_to_mine:
-                    vertex_gmsh_index_to_mine[gmsh_vertex_nr] = \
-                            len(vertex_gmsh_index_to_mine)
             if self.tags:
                 el_markers = self.element_markers[element]
                 el_tag_indexes = (
@@ -145,27 +146,22 @@ class GmshMeshReceiver(GmshMeshReceiverBase):
                 # record tags of boundary dimension
                 el_tags = [self.tags[i][0] for i in el_tag_indexes if
                            self.tags[i][1] == mesh_bulk_dim - 1]
-                el_grp_verts = {vertex_gmsh_index_to_mine[e] for e in el_vertices}
-                face_vertex_indices = frozenset(el_grp_verts)
+                face_vertex_indices = frozenset(el_vertices)
                 if face_vertex_indices not in face_vertex_indices_to_tags:
                     face_vertex_indices_to_tags[face_vertex_indices] = []
                 face_vertex_indices_to_tags[face_vertex_indices] += el_tags
 
-        # }}}
-
         # {{{ build vertex array
 
-        gmsh_vertex_indices, my_vertex_indices = \
-                list(zip(*vertex_gmsh_index_to_mine.items()))
-        vertices = np.empty(
-                (ambient_dim, len(vertex_gmsh_index_to_mine)), dtype=np.float64)
-        vertices[:, np.array(my_vertex_indices, np.intp)] = \
-                self.points[np.array(gmsh_vertex_indices, np.intp)].T
+        vertices = np.asarray(self.points.T, dtype=np.float64, order="C")
 
         # }}}
 
         from meshmode.mesh import (
-            Mesh, SimplexElementGroup, TensorProductElementGroup)
+            SimplexElementGroup,
+            TensorProductElementGroup,
+            make_mesh,
+        )
 
         bulk_el_types = set()
 
@@ -189,15 +185,15 @@ class GmshMeshReceiver(GmshMeshReceiverBase):
             i = 0
 
             for el_vertices, el_nodes, el_type, el_markers in zip(
-                    self.element_vertices, self.element_nodes, self.element_types,
-                    self.element_markers):
+                    self.element_vertices,
+                    self.element_nodes,
+                    self.element_types,
+                    self.element_markers, strict=True):
                 if el_type is not group_el_type:
                     continue
 
                 nodes[:, i] = self.points[el_nodes].T
-                vertex_indices[i] = [
-                        vertex_gmsh_index_to_mine[v_nr] for v_nr in el_vertices
-                        ]
+                vertex_indices[i] = el_vertices
 
                 if el_markers is not None:
                     for t in el_markers:
@@ -230,8 +226,8 @@ class GmshMeshReceiver(GmshMeshReceiverBase):
                     )
 
                 if group.dim == 2:
-                    from meshmode.mesh.processing import flip_simplex_element_group
-                    group = flip_simplex_element_group(vertices, group,
+                    from meshmode.mesh.processing import flip_element_group
+                    group = flip_element_group(vertices, group,
                             np.ones(ngroup_elements, bool))
 
             elif isinstance(group_el_type, GmshTensorProductElementBase):
@@ -263,15 +259,17 @@ class GmshMeshReceiver(GmshMeshReceiverBase):
 
         # compute facial adjacency for Mesh if there is tag information
         facial_adjacency_groups = None
+        face_vert_ind_to_tags_local = face_vertex_indices_to_tags.copy()
         if is_conforming and self.tags:
             from meshmode.mesh import _compute_facial_adjacency_from_vertices
             facial_adjacency_groups = _compute_facial_adjacency_from_vertices(
                     groups, np.int32, np.int8, face_vertex_indices_to_tags)
 
-        mesh = Mesh(
+        mesh = make_mesh(
                 vertices, groups,
                 is_conforming=is_conforming,
                 facial_adjacency_groups=facial_adjacency_groups,
+                face_vertex_indices_to_tags=face_vert_ind_to_tags_local,
                 **self.mesh_construction_kwargs)
 
         return (mesh, tag_to_elements) if return_tag_to_elements_map else mesh
@@ -301,15 +299,17 @@ def read_gmsh(
     """
     from gmsh_interop.reader import read_gmsh
     import time
-    print(f"Reading gmsh mesh from disk file...")
+    print("Reading gmsh mesh from disk file...")
     recv = GmshMeshReceiver(mesh_construction_kwargs=mesh_construction_kwargs)
+
     read_start = time.time()
     read_gmsh(recv, filename, force_dimension=force_ambient_dim)
     read_finish = time.time()
-    print(f"Done. Populating meshmode data structures...")
-    retval = recv.get_mesh(return_tag_to_elements_map=return_tag_to_elements_map)
+    print("Done. Populating meshmode data structures...")
+    retval = recv.get_mesh(
+        return_tag_to_elements_map=return_tag_to_elements_map)
     get_mesh_finish = time.time()
-    print(f"Done.")
+    print("Done.")
     print(f"Read GMSH: {read_finish - read_start}\n"
           f"MeshData: {get_mesh_finish - read_finish}")
     return retval
@@ -365,10 +365,10 @@ def generate_gmsh(source, dimensions=None, order=None, other_options=None,
         for idim in range(dim):
             if (mesh.vertices[idim] == 0).all():
                 from warnings import warn
-                warn("all vertices' %s coordinate is zero--perhaps you want to pass "
-                        "force_ambient_dim=%d (pass any fixed value to "
-                        "force_ambient_dim to silence this warning)" % (
-                            AXIS_NAMES[idim], idim))
+                warn(f"all vertices' {AXIS_NAMES[idim]} coordinate is zero -- "
+                     f"perhaps you want to pass force_ambient_dim={idim} (pass "
+                     "any fixed value to force_ambient_dim to silence this warning)",
+                     stacklevel=2)
                 break
 
     return result
@@ -378,22 +378,22 @@ def generate_gmsh(source, dimensions=None, order=None, other_options=None,
 
 # {{{ meshpy
 
-def from_meshpy(mesh_info, order=1):
+def from_meshpy(mesh_info, order=1) -> Mesh:
     """Imports a mesh from a :mod:`meshpy` *mesh_info* data structure,
     which may be generated by either :mod:`meshpy.triangle` or
     :mod:`meshpy.tet`.
     """
-    from meshmode.mesh import Mesh
+    from meshmode.mesh import make_mesh
     from meshmode.mesh.generation import make_group_from_vertices
 
     vertices = np.array(mesh_info.points).T
-    elements = np.array(mesh_info.elements, np.int32)
+    elements: np.ndarray = np.array(mesh_info.elements, np.int32)
 
     grp = make_group_from_vertices(vertices, elements, order)
 
     # FIXME: Should transfer boundary/volume markers
 
-    return Mesh(
+    return make_mesh(
             vertices=vertices, groups=[grp],
             is_conforming=True)
 
@@ -402,7 +402,12 @@ def from_meshpy(mesh_info, order=1):
 
 # {{{ from_vertices_and_simplices
 
-def from_vertices_and_simplices(vertices, simplices, order=1, fix_orientation=False):
+def from_vertices_and_simplices(
+                vertices: np.ndarray,
+                simplices: np.ndarray,
+                order: int = 1,
+                fix_orientation: bool = False
+            ) -> Mesh:
     """Imports a mesh from a numpy array of vertices and an array
     of simplices.
 
@@ -413,7 +418,7 @@ def from_vertices_and_simplices(vertices, simplices, order=1, fix_orientation=Fa
         An array *(nelements, nvertices)* of (mesh-wide)
         vertex indices.
     """
-    from meshmode.mesh import Mesh
+    from meshmode.mesh import make_mesh
     from meshmode.mesh.generation import make_group_from_vertices
 
     grp = make_group_from_vertices(vertices, simplices, order)
@@ -423,11 +428,13 @@ def from_vertices_and_simplices(vertices, simplices, order=1, fix_orientation=Fa
             raise ValueError("can only fix orientation of volume meshes")
 
         from meshmode.mesh.processing import (
-            find_volume_mesh_element_group_orientation, flip_simplex_element_group)
+            find_volume_mesh_element_group_orientation,
+            flip_element_group,
+        )
         orient = find_volume_mesh_element_group_orientation(vertices, grp)
-        grp = flip_simplex_element_group(vertices, grp, orient < 0)
+        grp = flip_element_group(vertices, grp, orient < 0)
 
-    return Mesh(
+    return make_mesh(
             vertices=vertices, groups=[grp],
             is_conforming=True)
 
@@ -436,7 +443,7 @@ def from_vertices_and_simplices(vertices, simplices, order=1, fix_orientation=Fa
 
 # {{{ to_json
 
-def to_json(mesh):
+def to_json(mesh: Mesh) -> dict:
     """Return a JSON-able Python data structure for *mesh*. The structure directly
     reflects the :class:`meshmode.mesh.Mesh` data structure."""
 
@@ -450,12 +457,12 @@ def to_json(mesh):
             "dim": group.dim,
             }
 
-    from meshmode import DataUnavailable
+    from meshmode import DataUnavailableError
 
     def nodal_adjacency_to_json(mesh):
         try:
             na = mesh.nodal_adjacency
-        except DataUnavailable:
+        except DataUnavailableError:
             return None
 
         return {
@@ -471,7 +478,7 @@ def to_json(mesh):
         # - added is_conforming
 
         "version": 1,
-        "vertices": mesh.vertices.tolist(),
+        "vertices": None if mesh.vertices is None else mesh.vertices.tolist(),
         "groups": [group_to_json(group) for group in mesh.groups],
         "nodal_adjacency": nodal_adjacency_to_json(mesh),
         # not yet implemented

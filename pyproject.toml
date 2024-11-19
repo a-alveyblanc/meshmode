@@ -1,0 +1,192 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [
+    "setuptools>=63",
+]
+
+[project]
+name = "meshmode"
+version = "2024.0"
+description = "High-order polynomial discretizations of and on meshes"
+readme = "README.rst"
+license = { text = "MIT" }
+authors = [
+    { name = "Andreas Kloeckner", email = "inform@tiker.net" },
+]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Other Audience",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "arraycontext>=2021.1",
+    "gmsh-interop>=2021.1",
+    "loopy>=2024.1",
+    "modepy>=2021.1",
+    "numpy",
+    "pymbolic>=2022.2",
+    "pytools>=2022.1",
+    "recursivenodes",
+]
+
+[project.optional-dependencies]
+doc = [
+    "furo",
+    "sphinx>=4",
+    "sphinx-copybutton",
+]
+test = [
+    "mypy",
+    "pylint",
+    "pytest",
+    "ruff",
+]
+visualization = [
+    "h5py",
+    "pyvisfile>=2022.1",
+]
+
+[project.urls]
+Documentation = "https://documen.tician.de/meshmode"
+Repository = "https://github.com/inducer/meshmode"
+
+[tool.setuptools.packages.find]
+include = [
+    "meshmode*",
+]
+
+[tool.setuptools.package-dir]
+# https://github.com/Infleqtion/client-superstaq/pull/715
+"" = "."
+
+[tool.setuptools.package-data]
+meshmode = [
+    "py.typed",
+]
+
+[tool.ruff]
+preview = true
+
+[tool.ruff.lint]
+extend-select = [
+    "B",    # flake8-bugbear
+    "C",    # flake8-comprehensions
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "G",    # flake8-logging-format
+    "I",    # flake8-isort
+    "N",    # pep8-naming
+    "NPY",  # numpy
+    "Q",    # flake8-quotes
+    "RUF",  # ruff
+    "UP",   # pyupgrade
+    "W",    # pycodestyle
+]
+extend-ignore = [
+    "C90",  # McCabe complexity
+    "E226", # missing whitespace around arithmetic operator
+    "E241", # multiple spaces after comma
+    "E242", # tab after comma
+    "E265", # comment should have a space
+    "E402", # module level import not at the top of file
+    "N802", # function name should be lowercase
+    "N803", # argument name should be lowercase
+    "N806", # variable name should be lowercase
+    "N818", # error suffix in exception names
+    "UP031", # use f-strings instead of % format
+    "UP032", # use f-strings instead of .format
+]
+
+[tool.ruff.lint.flake8-quotes]
+docstring-quotes = "double"
+inline-quotes = "double"
+multiline-quotes = "double"
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = [
+    "pytools",
+    "pyopencl",
+    "loopy",
+    "arraycontext",
+    "gmsh_interop",
+    "pyvisfile",
+    "modepy",
+    "pytato",
+    "pymbolic",
+    "pymetis",
+    "firedrake",
+]
+known-local-folder = [
+    "meshmode",
+]
+lines-after-imports = 2
+
+[tool.pytest.ini_options]
+markers = [
+    "mpi: test requires MPI",
+    "octave: test requires Octave",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = [
+    "meshmode.discretization.*",
+    "meshmode.dof_array.*",
+    "meshmode.interop.*",
+    "meshmode.mesh.visualization",
+    "meshmode.mesh.generation",
+    "meshmode.mesh.refinement.utils",
+    "meshmode.mesh.refinement.tessellate",
+]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+    "FIAT.*",
+    "finat.*",
+    "firedrake.*",
+    "gmsh_interop.*",
+    "h5py.*",
+    "loopy.*",
+    "matplotlib.*",
+    "mayavi.*",
+    "mpl_toolkits.*",
+    "oct2py.*",
+    "pymbolic.*",
+    "pymetis.*",
+    "pyop2.*",
+    "pyopencl.*",
+    "pytential.*",
+    "pyvisfile.*",
+    "recursivenodes.*",
+    "scipy.*",
+]
+ignore_missing_imports = true
+
+
+[tool.typos.default]
+extend-ignore-re = [
+  "(?Rm)^.*(#|//)\\s*spellchecker:\\s*disable-line$"
+]
+
+[tool.typos.default.extend-words]
+"PN" = "PN"
+"nd" = "nd"
+# TODO: needed by deprecated MPIMeshDistributor.is_mananger_rank
+"mananger" = "mananger"

@@ -83,8 +83,8 @@ class NodalDGContext:
 
         self.octave.exit()
 
-    REF_AXES = ["r", "s", "t"]
-    AXES = ["x", "y", "z"]
+    REF_AXES = ("r", "s", "t")
+    AXES = ("x", "y", "z")
 
     def set_mesh(self, mesh: meshmode.mesh.Mesh, order):
         """Set the mesh information in the nodal DG Octave instance to
@@ -132,7 +132,7 @@ class NodalDGContext:
                     f"Nodes{dim}D(N)", nout=dim, verbose=False)
 
             equilat_to_unit_func_name = (
-                    "".join(self.AXES[:dim] + ["to"] + self.REF_AXES[:dim]))
+                    "".join(self.AXES[:dim] + ("to",) + self.REF_AXES[:dim]))
 
             unit_nodes_arrays = self.octave.feval(
                     equilat_to_unit_func_name, *unit_nodes_arrays,
@@ -146,7 +146,7 @@ class NodalDGContext:
         nodes = np.array([self.octave.pull(self.AXES[ax]).T for ax in range(dim)])
         vertex_indices = (self.octave.pull("EToV")).astype(np.int32)-1
 
-        from meshmode.mesh import Mesh, SimplexElementGroup
+        from meshmode.mesh import SimplexElementGroup, make_mesh
         order = int(self.octave.pull("N"))
         egroup = SimplexElementGroup.make_group(
                 order,
@@ -154,11 +154,12 @@ class NodalDGContext:
                 nodes=nodes,
                 unit_nodes=unit_nodes)
 
-        mesh = Mesh(vertices=vertices, groups=[egroup], is_conforming=True)
+        mesh = make_mesh(vertices=vertices, groups=[egroup], is_conforming=True)
 
         from meshmode.discretization import Discretization
         from meshmode.discretization.poly_element import (
-            PolynomialGivenNodesGroupFactory)
+            PolynomialGivenNodesGroupFactory,
+        )
         return Discretization(actx, mesh,
                 PolynomialGivenNodesGroupFactory(order, unit_nodes))
 

@@ -33,17 +33,28 @@ from arraycontext import flatten, pytest_generate_tests_for_array_contexts
 import meshmode.mesh.generation as mgen
 from meshmode import _acf  # noqa: F401
 from meshmode.array_context import (
-    PytestPyOpenCLArrayContextFactory, PytestPytatoPyOpenCLArrayContextFactory)
+    PytestPyOpenCLArrayContextFactory,
+    PytestPytatoPyOpenCLArrayContextFactory,
+)
 from meshmode.discretization.connection import FACE_RESTR_ALL, FACE_RESTR_INTERIOR
 from meshmode.discretization.poly_element import (
     InterpolatoryQuadratureSimplexGroupFactory,
     LegendreGaussLobattoTensorProductGroupFactory,
-    PolynomialEquidistantSimplexGroupFactory, PolynomialRecursiveNodesGroupFactory,
+    PolynomialEquidistantSimplexGroupFactory,
+    PolynomialRecursiveNodesGroupFactory,
     PolynomialWarpAndBlend2DRestrictingGroupFactory,
-    PolynomialWarpAndBlend3DRestrictingGroupFactory, default_simplex_group_factory)
+    PolynomialWarpAndBlend3DRestrictingGroupFactory,
+    default_simplex_group_factory,
+)
 from meshmode.dof_array import flat_norm
 from meshmode.mesh import (
-    BTAG_ALL, Mesh, MeshElementGroup, SimplexElementGroup, TensorProductElementGroup)
+    BTAG_ALL,
+    Mesh,
+    MeshElementGroup,
+    SimplexElementGroup,
+    TensorProductElementGroup,
+    make_mesh,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -113,7 +124,9 @@ def test_boundary_interpolation(actx_factory, group_factory, boundary_tag,
 
     from meshmode.discretization import Discretization
     from meshmode.discretization.connection import (
-        check_connection, make_face_restriction)
+        check_connection,
+        make_face_restriction,
+    )
     eoc_rec = EOCRecorder()
 
     order = 4
@@ -178,7 +191,8 @@ def test_boundary_interpolation(actx_factory, group_factory, boundary_tag,
 
         if mesh_name == "blob" and dim == 2 and mesh.nelements < 500:
             from meshmode.discretization.connection.direct import (
-                make_direct_full_resample_matrix)
+                make_direct_full_resample_matrix,
+            )
             mat = actx.to_numpy(
                     make_direct_full_resample_matrix(actx, bdry_connection))
             bdry_f_2_by_mat = mat.dot(actx.to_numpy(flatten(vol_f, actx)))
@@ -232,7 +246,10 @@ def test_all_faces_interpolation(actx_factory, group_factory,
 
     from meshmode.discretization import Discretization
     from meshmode.discretization.connection import (
-        check_connection, make_face_restriction, make_face_to_all_faces_embedding)
+        check_connection,
+        make_face_restriction,
+        make_face_to_all_faces_embedding,
+    )
     eoc_rec = EOCRecorder()
 
     order = 4
@@ -254,7 +271,7 @@ def test_all_faces_interpolation(actx_factory, group_factory,
                     FileSource(str(thisdir / "blob-2d.step")), 2, order=order,
                     force_ambient_dim=2,
                     other_options=[
-                        "-string", "Mesh.CharacteristicLengthMax = %s;" % h],
+                        "-string", f"Mesh.CharacteristicLengthMax = {h};"],
                     target_unit="MM",
                     )
             print("END GEN")
@@ -358,7 +375,10 @@ def test_opposite_face_interpolation(actx_factory, group_factory,
 
     from meshmode.discretization import Discretization
     from meshmode.discretization.connection import (
-        check_connection, make_face_restriction, make_opposite_face_connection)
+        check_connection,
+        make_face_restriction,
+        make_opposite_face_connection,
+    )
     eoc_rec = EOCRecorder()
 
     order = 5
@@ -388,7 +408,7 @@ def test_opposite_face_interpolation(actx_factory, group_factory,
                     FileSource(str(thisdir / "blob-2d.step")), 2, order=order,
                     force_ambient_dim=2,
                     other_options=[
-                        "-string", "Mesh.CharacteristicLengthMax = %s;" % h],
+                        "-string", f"Mesh.CharacteristicLengthMax = {h};"],
                     target_unit="MM",
                     )
             print("END GEN")
@@ -513,7 +533,7 @@ def test_orientation_3d(actx_factory, what, mesh_gen_func, visualize=False):
         from meshmode.discretization.visualization import make_visualizer
         vis = make_visualizer(actx, discr, 3)
 
-        vis.write_vtk_file("orientation_3d_%s_normals.vtu" % what, [
+        vis.write_vtk_file(f"orientation_3d_{what}_normals.vtu", [
             ("normals", normals),
             ])
 
@@ -553,7 +573,7 @@ def test_sanity_single_element(actx_factory, dim, mesh_order, group_cls,
     vertex_indices = np.arange(shape.nvertices, dtype=np.int32).reshape(1, -1)
 
     mg = group_cls.make_group(mesh_order, vertex_indices, nodes, dim=dim)
-    mesh = Mesh(vertices, [mg], is_conforming=True)
+    mesh = make_mesh(vertices, [mg], is_conforming=True)
 
     from meshmode.discretization import Discretization
     vol_discr = Discretization(actx, mesh, group_factory)
@@ -561,7 +581,7 @@ def test_sanity_single_element(actx_factory, dim, mesh_order, group_cls,
     # {{{ volume calculation check
 
     if isinstance(mg, SimplexElementGroup):
-        from pytools import factorial
+        from math import factorial
         true_vol = 1/factorial(dim) * 2**dim
     elif isinstance(mg, TensorProductElementGroup):
         true_vol = 2**dim
@@ -645,7 +665,7 @@ def test_sanity_no_elements(actx_factory, dim, mesh_order, group_cls,
     vertex_indices = np.empty((0, shape.nvertices), dtype=np.int32)
 
     mg = group_cls.make_group(mesh_order, vertex_indices, nodes, dim=dim)
-    mesh = Mesh(vertices, [mg], is_conforming=True)
+    mesh = make_mesh(vertices, [mg], is_conforming=True)
 
     from meshmode.discretization import Discretization
     vol_discr = Discretization(actx, mesh, group_factory)
@@ -691,9 +711,10 @@ def test_sanity_qhull_nd(actx_factory, dim, order):
 
     logging.basicConfig(level=logging.INFO)
     actx = actx_factory()
+    rng = np.random.default_rng(seed=42)
 
     from scipy.spatial import Delaunay  # pylint: disable=no-name-in-module
-    verts = np.random.rand(1000, dim)
+    verts = rng.random(size=(1000, dim))
     dtri = Delaunay(verts)
 
     # pylint: disable=no-member
@@ -762,7 +783,7 @@ def test_sanity_balls(actx_factory, src_file, dim, mesh_order, visualize=False):
         from meshmode.mesh.io import FileSource, generate_gmsh
         mesh = generate_gmsh(
                 FileSource(src_file), dim, order=mesh_order,
-                other_options=["-string", "Mesh.CharacteristicLengthMax = %g;" % h],
+                other_options=["-string", f"Mesh.CharacteristicLengthMax = {h};"],
                 force_ambient_dim=dim,
                 target_unit="MM")
 
@@ -865,11 +886,10 @@ def test_mesh_without_vertices(actx_factory):
 
     # create one without the vertices
     from dataclasses import replace
-    grp, = mesh.groups
     groups = [
         replace(grp, nodes=grp.nodes, vertex_indices=None)
         for grp in mesh.groups]
-    mesh = Mesh(None, groups, is_conforming=False)
+    mesh = make_mesh(None, groups, is_conforming=None)
 
     # try refining it
     from meshmode.mesh.refinement import refine_uniformly
@@ -953,8 +973,11 @@ def test_mesh_multiple_groups(actx_factory, ambient_dim, visualize=False):
 
     # check face restrictions
     from meshmode.discretization.connection import (
-        check_connection, make_face_restriction, make_face_to_all_faces_embedding,
-        make_opposite_face_connection)
+        check_connection,
+        make_face_restriction,
+        make_face_to_all_faces_embedding,
+        make_opposite_face_connection,
+    )
     for boundary_tag in [BTAG_ALL, FACE_RESTR_INTERIOR, FACE_RESTR_ALL]:
         conn = make_face_restriction(actx, discr,
                 group_factory=grp_factory,

@@ -37,8 +37,11 @@ from meshmode.array_context import PytestPyOpenCLArrayContextFactory
 from meshmode.discretization.poly_element import default_simplex_group_factory
 from meshmode.dof_array import flat_norm
 from meshmode.mesh import (
-    BTAG_ALL, BoundaryAdjacencyGroup, InteriorAdjacencyGroup,
-    InterPartAdjacencyGroup)
+    BTAG_ALL,
+    BoundaryAdjacencyGroup,
+    InteriorAdjacencyGroup,
+    InterPartAdjacencyGroup,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -65,8 +68,8 @@ TAG_SEND_LOCAL_NODES = TAG_BASE + 4
 def test_partition_interpolation(actx_factory, dim, mesh_pars,
                                  num_parts, num_groups, part_method):
     order = 4
+    rng = np.random.default_rng(seed=42)
 
-    np.random.seed(42)
     group_factory = default_simplex_group_factory(base_dim=dim, order=order)
     actx = actx_factory()
 
@@ -88,7 +91,7 @@ def test_partition_interpolation(actx_factory, dim, mesh_pars,
             mesh = base_mesh
 
         if part_method == "random":
-            part_per_element = np.random.randint(num_parts, size=mesh.nelements)
+            part_per_element = rng.integers(0, num_parts, size=mesh.nelements)
         else:
             pytest.importorskip("pymetis")
 
@@ -114,7 +117,10 @@ def test_partition_interpolation(actx_factory, dim, mesh_pars,
                         for part_mesh in part_meshes.values()]
 
         from meshmode.discretization.connection import (
-            check_connection, make_face_restriction, make_partition_connection)
+            check_connection,
+            make_face_restriction,
+            make_partition_connection,
+        )
         from meshmode.mesh import BTAG_PARTITION
 
         for i_local_part, i_remote_part in connected_parts:
@@ -205,7 +211,8 @@ def _check_for_cross_rank_adj(mesh, part_per_element):
         ])
 @pytest.mark.parametrize("num_groups", [1, 2, 7])
 def test_partition_mesh(mesh_size, num_parts, num_groups, dim, scramble_parts):
-    np.random.seed(42)
+    rng = np.random.default_rng(seed=42)
+
     nelements_per_axis = (mesh_size,) * dim
     from meshmode.mesh.generation import generate_regular_rect_mesh
     meshes = [generate_regular_rect_mesh(a=(0 + i,) * dim, b=(1 + i,) * dim,
@@ -215,7 +222,7 @@ def test_partition_mesh(mesh_size, num_parts, num_groups, dim, scramble_parts):
     mesh = merge_disjoint_meshes(meshes)
 
     if scramble_parts:
-        part_per_element = np.random.randint(num_parts, size=mesh.nelements)
+        part_per_element = rng.integers(0, num_parts, size=mesh.nelements)
     else:
         pytest.importorskip("pymetis")
 
@@ -260,7 +267,7 @@ def test_partition_mesh(mesh_size, num_parts, num_groups, dim, scramble_parts):
                 if isinstance(fagrp, InterPartAdjacencyGroup)]
             for ipagrp in ipagrps:
                 for i, (elem, face) in enumerate(
-                        zip(ipagrp.elements, ipagrp.element_faces)):
+                        zip(ipagrp.elements, ipagrp.element_faces, strict=True)):
                     index_lookup_table[ipart, igrp, elem, face] = i
 
     ipagrp_count = 0
@@ -314,8 +321,8 @@ def test_partition_mesh(mesh_size, num_parts, num_groups, dim, scramble_parts):
                     assert found_reverse_adj, ("InterPartAdjacencyGroup is not "
                         "consistent")
 
-                    p_grp_num = find_group_indices(mesh.groups, p_meshwide_elem)
-                    p_n_grp_num = find_group_indices(mesh.groups, p_meshwide_n_elem)
+                    p_grp_num = find_group_indices(mesh.groups, p_meshwide_elem)  # pylint: disable=possibly-used-before-assignment
+                    p_n_grp_num = find_group_indices(mesh.groups, p_meshwide_n_elem)  # pylint: disable=possibly-used-before-assignment
 
                     p_elem_base = mesh.base_element_nrs[p_grp_num]
                     p_n_elem_base = mesh.base_element_nrs[p_n_grp_num]
@@ -367,13 +374,13 @@ def count_tags(mesh, tag):
 def _test_mpi_boundary_swap(dim, order, num_groups):
     from mpi4py import MPI
 
-    from meshmode.distributed import (
-        MPIBoundaryCommSetupHelper, membership_list_to_map)
+    from meshmode.distributed import MPIBoundaryCommSetupHelper, membership_list_to_map
     from meshmode.mesh.processing import partition_mesh
     mpi_comm = MPI.COMM_WORLD
 
     if mpi_comm.rank == 0:
-        np.random.seed(42)
+        rng = np.random.default_rng(seed=42)
+
         from meshmode.mesh.generation import generate_warped_rect_mesh
         meshes = [generate_warped_rect_mesh(dim, order=order, nelements_side=4)
                         for _ in range(num_groups)]
@@ -384,9 +391,12 @@ def _test_mpi_boundary_swap(dim, order, num_groups):
         else:
             mesh = meshes[0]
 
-        part_id_to_part = partition_mesh(mesh,
-                       membership_list_to_map(
-                           np.random.randint(mpi_comm.size, size=mesh.nelements)))
+        part_id_to_part = partition_mesh(
+            mesh,
+            membership_list_to_map(rng.integers(0, mpi_comm.size, size=mesh.nelements))
+            )
+
+        assert list(part_id_to_part.keys()) == list(range(mpi_comm.size))
         parts = [part_id_to_part[i] for i in range(mpi_comm.size)]
 
         local_mesh = mpi_comm.scatter(parts)
@@ -395,7 +405,7 @@ def _test_mpi_boundary_swap(dim, order, num_groups):
 
     group_factory = default_simplex_group_factory(base_dim=dim, order=order)
 
-    from arraycontext import PyOpenCLArrayContext
+    from meshmode.array_context import PyOpenCLArrayContext
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
     actx = PyOpenCLArrayContext(queue, force_device_scalars=True)
@@ -424,6 +434,11 @@ def _test_mpi_boundary_swap(dim, order, num_groups):
             conns = bdry_setup_helper.complete_some()
             if not conns:
                 break
+
+            expected_keys = list(range(mpi_comm.size))
+            expected_keys.remove(mpi_comm.rank)
+            assert list(conns.keys()) == expected_keys
+
             for i_remote_part, conn in conns.items():
                 check_connection(actx, conn)
                 remote_to_local_bdry_conns[i_remote_part] = conn
@@ -455,7 +470,7 @@ def _test_connected_parts(mpi_comm, connected_parts):
     for i_remote_part in range(num_parts):
         if all_connected_masks[i_remote_part][mpi_comm.rank]:
             parts_connected_to_me.add(i_remote_part)
-    assert parts_connected_to_me == connected_parts
+    assert parts_connected_to_me == set(connected_parts)
 
 
 # TODO
@@ -568,7 +583,7 @@ def _test_data_transfer(mpi_comm, actx, local_bdry_conns,
 
         from numpy.linalg import norm
         err = norm(true_local_f - local_f, np.inf)
-        assert err < 1e-11, "Error = %f is too large" % err
+        assert err < 1e-11, f"Error = {err:f} is too large"
 
 # }}}
 

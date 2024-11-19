@@ -26,7 +26,7 @@ THE SOFTWARE.
 import logging
 from dataclasses import dataclass
 from functools import singledispatch
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -63,7 +63,10 @@ def separate_by_real_and_imag(names_and_fields, real_only):
         if isinstance(field, np.ndarray) and field.dtype.char == "O":
             assert len(field.shape) == 1
             from pytools.obj_array import (
-                obj_array_imag_copy, obj_array_real_copy, obj_array_vectorize)
+                obj_array_imag_copy,
+                obj_array_real_copy,
+                obj_array_vectorize,
+            )
 
             if field[0].dtype.kind == "c":
                 if real_only:
@@ -215,7 +218,7 @@ def _check_discr_same_connectivity(discr, other):
     if not all(
             sg.discretization_key() == og.discretization_key()
             and sg.nelements == og.nelements
-            for sg, og in zip(discr.groups, other.groups)):
+            for sg, og in zip(discr.groups, other.groups, strict=True)):
         return False
 
     return True
@@ -430,7 +433,8 @@ class VTKLagrangeConnectivity(VTKConnectivity):
         if isinstance(grp.mesh_el_group, SimplexElementGroup):
             from pyvisfile.vtk.vtk_ordering import (
                 vtk_lagrange_simplex_node_tuples,
-                vtk_lagrange_simplex_node_tuples_to_permutation)
+                vtk_lagrange_simplex_node_tuples_to_permutation,
+            )
 
             node_tuples = vtk_lagrange_simplex_node_tuples(
                     grp.dim, grp.order, vtk_version=vtk_version)
@@ -443,7 +447,8 @@ class VTKLagrangeConnectivity(VTKConnectivity):
         elif isinstance(grp.mesh_el_group, TensorProductElementGroup):
             from pyvisfile.vtk.vtk_ordering import (
                 vtk_lagrange_quad_node_tuples,
-                vtk_lagrange_quad_node_tuples_to_permutation)
+                vtk_lagrange_quad_node_tuples_to_permutation,
+            )
 
             node_tuples = vtk_lagrange_quad_node_tuples(
                     grp.dim, grp.order, vtk_version=vtk_version)
@@ -477,7 +482,8 @@ class VTKLagrangeConnectivity(VTKConnectivity):
                     grp.nunit_dofs,
                     grp.nelements * grp.nunit_dofs + 1,
                     grp.nunit_dofs)
-                for grp_offset, grp in zip(grp_offsets, self.vis_discr.groups)
+                for grp_offset, grp in zip(grp_offsets[:-1], self.vis_discr.groups,
+                                           strict=True)
                 ])
 
         return self.vis_discr.mesh.nelements, connectivity, offsets
@@ -583,7 +589,7 @@ class Visualizer:
                 nodes.append(0*nodes[0])
             assert len(nodes) == 3
 
-            args = tuple(nodes) + (field,)
+            args = (*nodes, field)
 
             # https://docs.enthought.com/mayavi/mayavi/auto/example_plotting_many_lines.html  # noqa: E501
             src = mlab.pipeline.scalar_scatter(*args)
@@ -598,7 +604,7 @@ class Visualizer:
             while len(nodes) < 3:
                 nodes.append(0*nodes[0])
 
-            args = tuple(nodes) + (vis_connectivity.reshape(-1, 3),)
+            args = (*nodes, vis_connectivity.reshape(-1, 3))
             kwargs["scalars"] = field
 
             mlab.triangular_mesh(*args, **kwargs)
@@ -737,14 +743,18 @@ class Visualizer:
 
             - Added *par_manifest_filename* and *par_file_names*.
             - Added *use_high_order*.
-        """  # noqa: E501
+        """
 
         if use_high_order is None:
             use_high_order = False
 
         from pyvisfile.vtk import (
-            VF_LIST_OF_COMPONENTS, AppendedDataXMLGenerator, DataArray,
-            ParallelXMLGenerator, UnstructuredGrid)
+            VF_LIST_OF_COMPONENTS,
+            AppendedDataXMLGenerator,
+            DataArray,
+            ParallelXMLGenerator,
+            UnstructuredGrid,
+        )
 
         nodes = self._vis_nodes_numpy()
 
@@ -855,13 +865,13 @@ class Visualizer:
     # {{{ vtkhdf
 
     def write_vtkhdf_file(self,
-            file_name: str, names_and_fields: List[Tuple[str, Any]], *,
+            file_name: str, names_and_fields: list[tuple[str, Any]], *,
             comm=None,
             use_high_order: bool = False,
             real_only: bool = False,
             overwrite: bool = False,
-            h5_file_options: Optional[Dict[str, Any]] = None,
-            dset_options: Optional[Dict[str, Any]] = None) -> None:
+            h5_file_options: dict[str, Any] | None = None,
+            dset_options: dict[str, Any] | None = None) -> None:
         """Write a VTK HDF5 file (typical extension ``'.hdf'``) containing
         the visualization fields in *names_and_fields*.
 
@@ -923,7 +933,7 @@ class Visualizer:
         # {{{ write
 
         # https://gitlab.kitware.com/vtk/vtk/-/merge_requests/7552/diffs?commit_id=ff63361e1e625bf5f8ff82a4063a9bc5b9f35818#92f6af7573e5302296e4d465fea1d411d4a2611d
-        # https://vtk.org/doc/nightly/html/VTKHDFFileFormat.html
+        # https://docs.vtk.org/en/latest/design_documents/VTKFileFormats.html#vtkhdf-file-format
 
         def create_dataset(grp, name, data, *, shape, offset):
             if data.ndim == 2 and data.shape[1] < 3:
@@ -1123,7 +1133,11 @@ class Visualizer:
         #   Paraview.
 
         from pyvisfile.xdmf import (
-            DataArray, GeometryType, Information, XdmfUnstructuredGrid)
+            DataArray,
+            GeometryType,
+            Information,
+            XdmfUnstructuredGrid,
+        )
 
         if self.vis_discr.ambient_dim == 2:
             geometry_type = GeometryType.XY
@@ -1148,7 +1162,8 @@ class Visualizer:
 
             grids = []
             node_nr_base = 0
-            for igrp, (vgrp, gnodes) in enumerate(zip(connectivity.groups, nodes)):
+            for igrp, (vgrp, gnodes) in enumerate(
+                    zip(connectivity.groups, nodes, strict=True)):
                 grp_name = f"Group_{igrp:05d}"
                 h5grp = h5grid.create_group(grp_name)
 
@@ -1202,6 +1217,7 @@ class Visualizer:
 
     def show_scalar_in_matplotlib_3d(self, field, **kwargs):
         import matplotlib.pyplot as plt
+
         # This import also registers the 3D projection.
         import mpl_toolkits.mplot3d.art3d as art3d
 
@@ -1230,7 +1246,12 @@ class Visualizer:
             while len(nodes) < 3:
                 nodes.append(0*nodes[0])
 
-            from matplotlib.tri.triangulation import Triangulation
+            try:
+                from matplotlib.tri import Triangulation
+            except ImportError:
+                # NOTE: deprecated starting with v3.7
+                from matplotlib.tri.triangulation import Triangulation
+
             tri, _, kwargs = \
                 Triangulation.get_from_args_and_kwargs(
                         *nodes,
@@ -1289,15 +1310,17 @@ def make_visualizer(actx, discr, vis_order=None,
     else:
         if force_equidistant:
             from meshmode.discretization.poly_element import (
-                InterpolatoryEquidistantGroupFactory as VisGroupFactory)
+                InterpolatoryEquidistantGroupFactory as VisGroupFactory,
+            )
         else:
             from meshmode.discretization.poly_element import (
-                InterpolatoryEdgeClusteredGroupFactory as VisGroupFactory)
+                InterpolatoryEdgeClusteredGroupFactory as VisGroupFactory,
+            )
 
         vis_discr = discr.copy(actx=actx, group_factory=VisGroupFactory(vis_order))
 
         if all(grp.discretization_key() == vgrp.discretization_key()
-                for grp, vgrp in zip(discr.groups, vis_discr.groups)):
+                for grp, vgrp in zip(discr.groups, vis_discr.groups, strict=True)):
             from warnings import warn
             warn("Visualization discretization is identical to base discretization. "
                     "To avoid the creation of a separate discretization for "
@@ -1351,14 +1374,18 @@ def write_nodal_adjacency_vtk_file(file_name, mesh,
                                    compressor=None,
                                    overwrite=False):
     from pyvisfile.vtk import (
-        VF_LIST_OF_COMPONENTS, VTK_LINE, AppendedDataXMLGenerator, DataArray,
-        UnstructuredGrid)
+        VF_LIST_OF_COMPONENTS,
+        VTK_LINE,
+        AppendedDataXMLGenerator,
+        DataArray,
+        UnstructuredGrid,
+    )
 
     centroids = np.empty(
             (mesh.ambient_dim, mesh.nelements),
             dtype=mesh.vertices.dtype)
 
-    for base_element_nr, grp in zip(mesh.base_element_nrs, mesh.groups):
+    for base_element_nr, grp in zip(mesh.base_element_nrs, mesh.groups, strict=True):
         centroids[:, base_element_nr:base_element_nr + grp.nelements] = (
                 np.sum(mesh.vertices[:, grp.vertex_indices], axis=-1)
                 / grp.vertex_indices.shape[-1])

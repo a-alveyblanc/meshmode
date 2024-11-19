@@ -36,13 +36,20 @@ from arraycontext import pytest_generate_tests_for_array_contexts
 
 import meshmode.mesh.generation as mgen
 import meshmode.mesh.io as mio
+import meshmode.mesh.processing as mproc
 from meshmode import _acf  # noqa: F401
 from meshmode.array_context import PytestPyOpenCLArrayContextFactory
 from meshmode.discretization.poly_element import (
-    LegendreGaussLobattoTensorProductGroupFactory, default_simplex_group_factory)
+    LegendreGaussLobattoTensorProductGroupFactory,
+    default_simplex_group_factory,
+)
 from meshmode.mesh import (
-    BoundaryAdjacencyGroup, InteriorAdjacencyGroup, Mesh, SimplexElementGroup,
-    TensorProductElementGroup)
+    BoundaryAdjacencyGroup,
+    InteriorAdjacencyGroup,
+    SimplexElementGroup,
+    TensorProductElementGroup,
+    make_mesh,
+)
 from meshmode.mesh.tools import AffineMap
 
 
@@ -60,8 +67,7 @@ def _get_rotation(amount, axis, center=None):
     corresponding to a rotation by *amount* (in radians) through a vector *axis*
     centered at *center*. *center* defaults to the origin if not specified.
     """
-    from meshmode.mesh.processing import _get_rotation_matrix_from_angle_and_axis
-    matrix = _get_rotation_matrix_from_angle_and_axis(amount, axis)
+    matrix = mproc._get_rotation_matrix_from_angle_and_axis(amount, axis)
     if center is None:
         return matrix
     else:
@@ -235,8 +241,7 @@ def test_circle_mesh(visualize=False):
     logger.info("END GEN")
     logger.info("nelements: %d", mesh.nelements)
 
-    from meshmode.mesh.processing import affine_map
-    mesh = affine_map(mesh, A=3*np.eye(2))
+    mesh = mproc.affine_map(mesh, A=3*np.eye(2))
 
     if visualize:
         from meshmode.mesh.visualization import draw_2d_mesh
@@ -257,6 +262,29 @@ def test_mesh_copy():
     mesh.copy()
 
 
+def test_remove_unused_vertices():
+    mesh = mgen.generate_box_mesh(3*(np.linspace(0, 1, 5),))
+
+    assert mesh.vertices is not None
+
+    mesh2 = mesh.copy(
+        vertices=np.concatenate([np.zeros((3, 1)), mesh.vertices], axis=1),
+        groups=tuple(
+            replace(
+                grp,
+                vertex_indices=grp.vertex_indices + 1
+                )
+            for grp in mesh.groups
+        ))
+
+    mesh3 = mproc.remove_unused_vertices(mesh2)
+
+    assert np.array_equal(mesh3.vertices, mesh.vertices)
+    assert np.array_equal(
+                  mesh3.groups[0].vertex_indices,
+                  mesh.groups[0].vertex_indices)
+
+
 # {{{ as_python stringification
 
 def test_mesh_as_python():
@@ -272,6 +300,7 @@ def test_mesh_as_python():
     print(code)
     exec_dict = {}
     exec(compile(code, "gen_code.py", "exec"), exec_dict)
+    exec_dict["_MODULE_SOURCE_CODE"] = code
 
     mesh_2 = exec_dict["make_mesh"]()
 
@@ -283,15 +312,17 @@ def test_mesh_as_python():
 # {{{ test_affine_map
 
 def test_affine_map():
+    rng = np.random.default_rng(seed=42)
+
     for d in range(1, 5):
         for _ in range(100):
-            a = np.random.randn(d, d)+10*np.eye(d)
-            b = np.random.randn(d)
+            a = rng.normal(size=(d, d)) + 10*np.eye(d)
+            b = rng.normal(size=d)
 
             m = AffineMap(a, b)
             assert la.norm(m.inverted().matrix - la.inv(a)) < 1e-10*la.norm(a)
 
-            x = np.random.randn(d)
+            x = rng.normal(size=d)
             m_inv = m.inverted()
             assert la.norm(x-m_inv(m(x))) < 1e-10
 
@@ -325,8 +356,6 @@ def test_affine_map_with_facial_adjacency_maps(visualize=False):
         from meshmode.mesh.visualization import write_vertex_vtk_file
         write_vertex_vtk_file(orig_mesh, "affine_map_facial_adj_original.vtu")
 
-    from meshmode.mesh.processing import affine_map
-
     tol = 1e-12
 
     def almost_equal(map1, map2):
@@ -341,7 +370,8 @@ def test_affine_map_with_facial_adjacency_maps(visualize=False):
             and component_almost_equal(map1.offset, map2.offset))
 
     # Matrix only
-    mesh = affine_map(orig_mesh, A=_get_rotation(np.pi/2, axis=np.array([0, 0, 1])))
+    mesh = mproc.affine_map(
+                orig_mesh, A=_get_rotation(np.pi/2, axis=np.array([0, 0, 1])))
 
     if visualize:
         write_vertex_vtk_file(mesh, "affine_map_facial_adj_matrix.vtu")
@@ -364,7 +394,7 @@ def test_affine_map_with_facial_adjacency_maps(visualize=False):
             -np.pi/2, axis=np.array([0, 0, 1]), center=np.array([-2, 1, 0])))
 
     # Offset only
-    mesh = affine_map(orig_mesh, b=np.array([0, -2, 0]))
+    mesh = mproc.affine_map(orig_mesh, b=np.array([0, -2, 0]))
 
     if visualize:
         write_vertex_vtk_file(mesh, "affine_map_facial_adj_offset.vtu")
@@ -389,7 +419,7 @@ def test_affine_map_with_facial_adjacency_maps(visualize=False):
     # Matrix and offset
     aff_map = _get_rotation(
         np.pi/2, axis=np.array([0, 0, 1]), center=np.array([1, 1, 0]))
-    mesh = affine_map(orig_mesh, A=aff_map.matrix, b=aff_map.offset)
+    mesh = mproc.affine_map(orig_mesh, A=aff_map.matrix, b=aff_map.offset)
 
     if visualize:
         write_vertex_vtk_file(mesh, "affine_map_facial_adj_matrix_and_offset.vtu")
@@ -429,16 +459,14 @@ def test_mesh_rotation(ambient_dim, visualize=False):
     else:
         raise ValueError("unsupported dimension")
 
-    from meshmode.mesh.processing import _get_rotation_matrix_from_angle_and_axis
-    mat = _get_rotation_matrix_from_angle_and_axis(
+    mat = mproc._get_rotation_matrix_from_angle_and_axis(
             np.pi/3.0, np.array([1.0, 2.0, 1.4]))
 
     # check that the matrix is in the rotation group
     assert abs(abs(la.det(mat)) - 1) < 10e-14
     assert la.norm(mat @ mat.T - np.eye(3)) < 1.0e-14
 
-    from meshmode.mesh.processing import rotate_mesh_around_axis
-    rotated_mesh = rotate_mesh_around_axis(mesh,
+    rotated_mesh = mproc.rotate_mesh_around_axis(mesh,
             theta=np.pi/2.0,
             axis=np.array([1, 0, 0]))
 
@@ -462,7 +490,7 @@ def test_mesh_to_tikz():
             FileSource(str(thisdir / "blob-2d.step")), 2, order=order,
             force_ambient_dim=2,
             other_options=[
-                "-string", "Mesh.CharacteristicLengthMax = %s;" % h],
+                "-string", f"Mesh.CharacteristicLengthMax = {h};"],
             target_unit="MM",
             )
 
@@ -486,7 +514,7 @@ def test_quad_single_element(visualize=False):
             np.array([[0, 1, 2, 3]], dtype=np.int32),
             30, group_cls=TensorProductElementGroup)
 
-    Mesh(vertices, [mg], nodal_adjacency=None, facial_adjacency_groups=None)
+    make_mesh(vertices, [mg], nodal_adjacency=None, facial_adjacency_groups=None)
     if visualize:
         import matplotlib.pyplot as plt
         plt.plot(
@@ -527,12 +555,11 @@ def test_merge_and_map(actx_factory, group_cls, visualize=False):
 
         discr_grp_factory = LegendreGaussLobattoTensorProductGroupFactory(order)
 
-    from meshmode.mesh.processing import affine_map, merge_disjoint_meshes
-    mesh2 = affine_map(mesh,
+    mesh2 = mproc.affine_map(mesh,
             A=np.eye(mesh.ambient_dim),
             b=np.array([2, 0, 0])[:mesh.ambient_dim])
 
-    mesh3 = merge_disjoint_meshes((mesh2, mesh))
+    mesh3 = mproc.merge_disjoint_meshes((mesh2, mesh))
     assert mesh3.facial_adjacency_groups
 
     mesh4 = mesh3.copy()
@@ -551,21 +578,86 @@ def test_merge_and_map(actx_factory, group_cls, visualize=False):
 
 # {{{ element orientation
 
-def test_element_orientation_via_flipping():
+@pytest.mark.parametrize("case", ["blob", "gh-394", "3x3", "3x3_twisted",
+                                  "3x3_minus", "3x3_bound",
+                                  "3x3_twisted_bound"])
+def test_element_orientation_via_flipping(case):
     from meshmode.mesh.io import FileSource, generate_gmsh
 
     mesh_order = 3
 
-    mesh = generate_gmsh(
-            FileSource(str(thisdir / "blob-2d.step")), 2, order=mesh_order,
-            force_ambient_dim=2,
-            other_options=["-string", "Mesh.CharacteristicLengthMax = 0.02;"],
-            target_unit="MM",
-            )
+    meshfile = f"{thisdir}/{case}.msh"
+    if case == "blob":
+        mesh = generate_gmsh(
+                FileSource(str(thisdir / "blob-2d.step")), 2, order=mesh_order,
+                force_ambient_dim=2,
+                other_options=["-string", "Mesh.CharacteristicLengthMax = 0.02;"],
+                target_unit="MM",
+                )
+    elif case == "gh-394":
+        mesh = mio.read_gmsh(
+                             meshfile,
+                             force_ambient_dim=2,
+                             mesh_construction_kwargs={"skip_tests": True})
+    elif case == "3x3":  # regular ole rectangular 3x3 tensor product els (TPE)
+        mesh = mio.read_gmsh(
+                             meshfile,
+                             force_ambient_dim=2,
+                             mesh_construction_kwargs={"skip_tests": True})
+    elif case == "3x3_twisted":  # TPEs, rotated connectivities, all positive
+        mesh = mio.read_gmsh(
+                             meshfile,
+                             force_ambient_dim=2,
+                             mesh_construction_kwargs={"skip_tests": True})
+    elif case == "3x3_minus":  # TPEs with negative orientation (clockwise conn)
+        mesh = mio.read_gmsh(
+                             meshfile,
+                             force_ambient_dim=2,
+                             mesh_construction_kwargs={"skip_tests": True})
+    elif case == "3x3_bound":  # TPEs (clockwise conn, w/boundaries)
+        mesh = mio.read_gmsh(
+                             meshfile,
+                             force_ambient_dim=2,
+                             mesh_construction_kwargs={"skip_tests": True})
+    elif case == "3x3_twisted_bound":  # TPEs (clockwise conn, w/boundaries)
+        mesh = mio.read_gmsh(
+                             meshfile,
+                             force_ambient_dim=2,
+                             mesh_construction_kwargs={"skip_tests": True})
+    else:
+        raise ValueError(f"unknown case: {case}")
 
-    from meshmode.mesh.processing import (
-        find_volume_mesh_element_orientations, perform_flips)
-    mesh_orient = find_volume_mesh_element_orientations(mesh)
+    boundary_tags = set()
+    for igrp in range(len(mesh.groups)):
+        bdry_fagrps = [
+            fagrp for fagrp in mesh.facial_adjacency_groups[igrp]
+            if isinstance(fagrp, BoundaryAdjacencyGroup)]
+        for bdry_fagrp in bdry_fagrps:
+            print(f"Boundary tag: {bdry_fagrp.boundary_tag}")
+            boundary_tags.add(bdry_fagrp.boundary_tag)
+
+    mesh_orient = mproc.find_volume_mesh_element_orientations(mesh)
+    if not (mesh_orient > 0).all():
+        logger.info(f"Mesh({meshfile}) is negative, trying to reorient.")
+        print(f"Mesh({meshfile}) is negative, trying to reorient.")
+        mesh = mio.read_gmsh(
+            meshfile,
+            force_ambient_dim=2,
+            mesh_construction_kwargs={
+                "skip_tests": True,
+                "force_positive_orientation": True})
+
+        mesh_orient = mproc.find_volume_mesh_element_orientations(mesh)
+        boundary_tags_reoriented = set()
+        for igrp in range(len(mesh.groups)):
+            bdry_fagrps = [
+                fagrp for fagrp in mesh.facial_adjacency_groups[igrp]
+                if isinstance(fagrp, BoundaryAdjacencyGroup)]
+            for bdry_fagrp in bdry_fagrps:
+                boundary_tags_reoriented.add(bdry_fagrp.boundary_tag)
+
+        # Make sure rotation doesn't lose boundaries
+        assert boundary_tags == boundary_tags_reoriented
 
     assert (mesh_orient > 0).all()
 
@@ -574,20 +666,18 @@ def test_element_orientation_via_flipping():
     for _ in range(int(0.3*mesh.nelements)):
         flippy[randrange(0, mesh.nelements)] = 1
 
-    mesh = perform_flips(mesh, flippy, skip_tests=True)
+    mesh = mproc.perform_flips(mesh, flippy, skip_tests=True)
 
-    mesh_orient = find_volume_mesh_element_orientations(mesh)
+    mesh_orient = mproc.find_volume_mesh_element_orientations(mesh)
 
     assert ((mesh_orient < 0) == (flippy > 0)).all()
 
 
 @pytest.mark.parametrize("order", [1, 2, 3])
 def test_element_orientation_via_single_elements(order):
-    from meshmode.mesh.processing import find_volume_mesh_element_group_orientation
-
     def check(vertices, element_indices, tol=1e-14):
         grp = mgen.make_group_from_vertices(vertices, element_indices, order)
-        orient = find_volume_mesh_element_group_orientation(vertices, grp)
+        orient = mproc.find_volume_mesh_element_group_orientation(vertices, grp)
         return (
                 np.where(orient > tol)[0],
                 np.where(orient < tol)[0],
@@ -768,13 +858,13 @@ def test_lookup_tree(visualize=False):
     from meshmode.mesh.tools import make_element_lookup_tree
     tree = make_element_lookup_tree(mesh)
 
-    from meshmode.mesh.processing import find_bounding_box
-    bbox_min, bbox_max = find_bounding_box(mesh)
+    bbox_min, bbox_max = mproc.find_bounding_box(mesh)
 
     extent = bbox_max-bbox_min
+    rng = np.random.default_rng(seed=42)
 
     for _ in range(20):
-        pt = bbox_min + np.random.rand(2) * extent
+        pt = bbox_min + rng.random(size=2) * extent
         print(pt)
         for igrp, iel in tree.generate_matches(pt):
             print(igrp, iel)
@@ -831,7 +921,7 @@ def test_boundary_tags():
 
 def test_volume_tags():
     from meshmode.mesh.io import read_gmsh
-    mesh, tag_to_elements_map = read_gmsh(
+    _mesh, tag_to_elements_map = read_gmsh(  # pylint: disable=unpacking-non-sequence
         str(thisdir / "testmesh_multivol.msh"), return_tag_to_elements_map=True)
 
     assert len(tag_to_elements_map) == 2
@@ -864,7 +954,10 @@ def test_box_boundary_tags(dim, nelem, mesh_type, group_cls, visualize=False):
         pytest.skip("mesh type not supported on tensor product elements")
 
     from meshmode.mesh import (
-        check_bc_coverage, is_boundary_tag_empty, mesh_has_boundary)
+        check_bc_coverage,
+        is_boundary_tag_empty,
+        mesh_has_boundary,
+    )
 
     if dim == 1:
         a = (0,)
@@ -884,6 +977,9 @@ def test_box_boundary_tags(dim, nelem, mesh_type, group_cls, visualize=False):
         nelements_per_axis = (nelem,)*3
         btag_to_face = {"btag_test_1": ["+x", "-y", "-z"],
                         "btag_test_2": ["+y", "-x", "+z"]}
+    else:
+        raise AssertionError("unexpected dim")
+
     mesh = mgen.generate_regular_rect_mesh(a=a, b=b,
                                       nelements_per_axis=nelements_per_axis, order=3,
                                       boundary_tag_to_face=btag_to_face,
@@ -960,6 +1056,8 @@ def test_quad_mesh_2d(ambient_dim, filename, visualize=False):
             order=1,
             force_ambient_dim=ambient_dim,
             target_unit="MM",
+            # gmsh seems to make some negatively-oriented elements here
+            mesh_construction_kwargs={"force_positive_orientation": ambient_dim == 2}
             )
 
     logger.info("END GEN")
@@ -980,7 +1078,7 @@ def test_quad_mesh_2d(ambient_dim, filename, visualize=False):
 
         groups.append(g)
 
-    mesh_from_vertices = Mesh(mesh.vertices, groups=groups, is_conforming=True)
+    mesh_from_vertices = make_mesh(mesh.vertices, groups=groups, is_conforming=True)
 
     if visualize:
         from meshmode.mesh.visualization import write_vertex_vtk_file
@@ -1114,7 +1212,7 @@ def test_node_vertex_consistency_check(actx_factory):
             a, b, nelements_per_axis, perturb_amount):
         mesh_unperturbed = mgen.generate_regular_rect_mesh(
             a=a, b=b, nelements_per_axis=nelements_per_axis)
-        return mesh_unperturbed.copy(  # noqa: F841
+        return mesh_unperturbed.copy(
             vertices=(
                 mesh_unperturbed.vertices
                 + perturb_amount*np.ones(mesh_unperturbed.vertices.shape)),
@@ -1215,8 +1313,7 @@ def test_node_vertex_consistency_check(actx_factory):
     from meshmode.discretization import Discretization
     group_factory = default_simplex_group_factory(1, 1)
     vol_discr = Discretization(actx, vol_mesh, group_factory)
-    from meshmode.discretization.connection import (
-        FACE_RESTR_ALL, make_face_restriction)
+    from meshmode.discretization.connection import FACE_RESTR_ALL, make_face_restriction
     make_face_restriction(
         actx, vol_discr, group_factory, FACE_RESTR_ALL, per_face_groups=False)
 
@@ -1237,7 +1334,7 @@ def test_node_vertex_consistency_check(actx_factory):
         vol_mesh_unrotated = mgen.generate_regular_rect_mesh(
             a=(-1,)*2, b=(1,)*2,
             nelements_per_axis=(8,)*2)
-        vol_mesh = vol_mesh_unrotated.copy(  # noqa: F841
+        vol_mesh = vol_mesh_unrotated.copy(
             groups=[
                 replace(
                     grp,
@@ -1259,10 +1356,10 @@ def test_glued_mesh(use_tree):
     map_lower_to_upper = _get_rotation(np.pi/2, np.array([0, 0, 1]), center)
     map_upper_to_lower = _get_rotation(-np.pi/2, np.array([0, 0, 1]), center)
 
-    from meshmode.mesh.processing import BoundaryPairMapping, glue_mesh_boundaries
-    mesh = glue_mesh_boundaries(
+    mesh = mproc.glue_mesh_boundaries(
         orig_mesh, bdry_pair_mappings_and_tols=[
-            (BoundaryPairMapping("-theta", "+theta", map_lower_to_upper), 1e-12)
+            (mproc.BoundaryPairMapping("-theta", "+theta", map_lower_to_upper),
+             1e-12)
         ], use_tree=use_tree)
 
     int_grps = [
@@ -1330,10 +1427,10 @@ def test_glued_mesh_matrix_only():
     map_lower_to_upper = AffineMap(matrix=matrix_lower_to_upper)
     map_upper_to_lower = AffineMap(matrix=matrix_upper_to_lower)
 
-    from meshmode.mesh.processing import BoundaryPairMapping, glue_mesh_boundaries
-    mesh = glue_mesh_boundaries(
+    mesh = mproc.glue_mesh_boundaries(
         orig_mesh, bdry_pair_mappings_and_tols=[
-            (BoundaryPairMapping("-theta", "+theta", map_lower_to_upper), 1e-12)
+            (mproc.BoundaryPairMapping("-theta", "+theta", map_lower_to_upper),
+                1e-12)
         ])
 
     int_grps = [
@@ -1357,10 +1454,9 @@ def test_glued_mesh_offset_only():
     map_lower_to_upper = AffineMap(offset=offset_lower_to_upper)
     map_upper_to_lower = AffineMap(offset=offset_upper_to_lower)
 
-    from meshmode.mesh.processing import BoundaryPairMapping, glue_mesh_boundaries
-    mesh = glue_mesh_boundaries(
+    mesh = mproc.glue_mesh_boundaries(
         orig_mesh, bdry_pair_mappings_and_tols=[
-            (BoundaryPairMapping("-z", "+z", map_lower_to_upper), 1e-12)
+            (mproc.BoundaryPairMapping("-z", "+z", map_lower_to_upper), 1e-12)
         ])
 
     int_grps = [
@@ -1405,9 +1501,8 @@ def test_mesh_grid(actx_factory, mesh_name, has_offset, visualize=False):
     else:
         raise ValueError(f"unknown mesh name: '{mesh_name}'")
 
-    from meshmode.mesh.processing import make_mesh_grid
     shape = (6, 3, 2)[:mesh.ambient_dim]
-    mgrid = make_mesh_grid(
+    mgrid = mproc.make_mesh_grid(
         mesh,
         shape=shape,
         offset=offset if has_offset else None,
@@ -1425,7 +1520,7 @@ def test_mesh_grid(actx_factory, mesh_name, has_offset, visualize=False):
 
     assert all(
         separated(mgrid.groups[i].nodes, mgrid.groups[j].nodes)
-        for i, j in zip(range(m), range(m)) if i != j)
+        for i, j in zip(range(m), range(m), strict=True) if i != j)
 
     if not visualize:
         return

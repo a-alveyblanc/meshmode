@@ -36,12 +36,11 @@ class EagerReduceComputingPytatoFakeNumpyNamespace(PytatoFakeNumpyNamespace):
 
             def _pt_sum(ary):
                 return cl_array.sum(self._array_context.freeze(ary),
-                                 dtype=dtype,
-                                 queue=self._array_context.queue)
+                                    dtype=dtype,
+                                    queue=self._array_context.queue)
 
-            return self._array_context.thaw(rec_map_reduce_array_container(sum,
-                                                                           _pt_sum,
-                                                                           a))
+            return self._array_context.thaw(
+                rec_map_reduce_array_container(sum, _pt_sum, a))
         else:
             return super().sum(a, axis=axis, dtype=dtype)
 
@@ -80,12 +79,9 @@ class AxesTagsEquationCollector(BaseAxesTagsEquationCollector):
     def map_reshape(self, expr: pt.Reshape) -> None:
         super().map_reshape(expr)
 
-        # FIXME: what is this doing??
         if (expr.size > 0
                 and (1 not in (expr.array.shape))  # leads to ambiguous newaxis
-                and (set(expr.shape) <= (set(expr.array.shape) | {1}))
-                and (len(expr.shape) <= (len(expr.array.shape)))):
-            # NOTE: added final conditional to skip this for TP elements
+                and (set(expr.shape) <= (set(expr.array.shape) | {1}))):
             i_in_axis = 0
             for i_out_axis, dim in enumerate(expr.shape):
                 if dim != 1:
@@ -101,6 +97,7 @@ class AxesTagsEquationCollector(BaseAxesTagsEquationCollector):
             # print(f"Skipping: {expr.array.shape} -> {expr.shape}")
             # Wacky reshape => bail.
             pass
+
 
 def unify_discretization_entity_tags(expr: Union[ArrayContainer, ArrayOrNames]
                                      ) -> ArrayOrNames:

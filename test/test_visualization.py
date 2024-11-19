@@ -36,7 +36,9 @@ from meshmode import _acf  # noqa: F401
 from meshmode.array_context import PytestPyOpenCLArrayContextFactory
 from meshmode.discretization.poly_element import (
     InterpolatoryQuadratureSimplexGroupFactory,
-    LegendreGaussLobattoTensorProductGroupFactory, default_simplex_group_factory)
+    LegendreGaussLobattoTensorProductGroupFactory,
+    default_simplex_group_factory,
+)
 from meshmode.mesh import SimplexElementGroup, TensorProductElementGroup
 
 
@@ -83,10 +85,10 @@ def test_parallel_vtk_file(actx_factory, dim):
     vis = make_visualizer(actx, discr, target_order)
 
     class FakeComm:
-        def Get_rank(self):  # noqa: N802
+        def Get_rank(self):
             return 0
 
-        def Get_size(self):  # noqa: N802
+        def Get_size(self):
             return 2
 
     file_name_pattern = f"visualizer_vtk_linear_{dim}_{{rank}}.vtu"
@@ -323,7 +325,9 @@ def test_vtk_overwrite(actx_factory):
             InterpolatoryQuadratureSimplexGroupFactory(target_order))
 
     from meshmode.discretization.visualization import (
-        make_visualizer, write_nodal_adjacency_vtk_file)
+        make_visualizer,
+        write_nodal_adjacency_vtk_file,
+    )
     from meshmode.mesh.visualization import write_vertex_vtk_file
 
     vis = make_visualizer(actx, discr, 1)

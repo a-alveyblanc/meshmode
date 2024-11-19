@@ -1,3 +1,4 @@
+from importlib import metadata
 from urllib.request import urlopen
 
 
@@ -13,22 +14,15 @@ extensions.extend([  # noqa: F821
 
 tikz_tikzlibraries = "decorations.markings"
 
-copyright = "2014-21, Meshmode contributors"
-
-ver_dic = {}
-exec(
-        compile(
-            open("../meshmode/version.py").read(), "../meshmode/version.py", "exec"),
-        ver_dic)
-version = ".".join(str(x) for x in ver_dic["VERSION"])
-# The full version, including alpha/beta/rc tags.
-release = ver_dic["VERSION_TEXT"]
+copyright = "2014-2024, Meshmode contributors"
+release = metadata.version("meshmode")
+version = ".".join(release.split(".")[:2])
 
 intersphinx_mapping = {
     "arraycontext": ("https://documen.tician.de/arraycontext", None),
     "fenics": ("https://fenics.readthedocs.io/projects/fiat/en/latest", None),
     "FInAT": ("https://finat.github.io/FInAT/", None),
-    "firedrake": ("https://firedrakeproject.org", None),
+    "firedrake": ("https://www.firedrakeproject.org", None),
     "gmsh_interop": ("https://documen.tician.de/gmsh_interop", None),
     "h5py": ("https://docs.h5py.org/en/stable", None),
     "loopy": ("https://documen.tician.de/loopy", None),

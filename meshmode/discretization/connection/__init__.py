@@ -28,20 +28,33 @@ import logging
 from arraycontext import ArrayContext
 
 from meshmode.discretization.connection.chained import (
-    ChainedDiscretizationConnection, flatten_chained_connection)
+    ChainedDiscretizationConnection,
+    flatten_chained_connection,
+)
 from meshmode.discretization.connection.direct import (
-    DirectDiscretizationConnection, DiscretizationConnection,
-    DiscretizationConnectionElementGroup, IdentityDiscretizationConnection,
-    InterpolationBatch)
+    DirectDiscretizationConnection,
+    DiscretizationConnection,
+    DiscretizationConnectionElementGroup,
+    IdentityDiscretizationConnection,
+    InterpolationBatch,
+)
 from meshmode.discretization.connection.face import (
-    FACE_RESTR_ALL, FACE_RESTR_INTERIOR, make_face_restriction,
-    make_face_to_all_faces_embedding)
+    FACE_RESTR_ALL,
+    FACE_RESTR_INTERIOR,
+    make_face_restriction,
+    make_face_to_all_faces_embedding,
+)
 from meshmode.discretization.connection.modal import (
-    ModalToNodalDiscretizationConnection, NodalToModalDiscretizationConnection)
+    ModalToNodalDiscretizationConnection,
+    NodalToModalDiscretizationConnection,
+)
 from meshmode.discretization.connection.opposite_face import (
-    make_opposite_face_connection, make_partition_connection)
+    make_opposite_face_connection,
+    make_partition_connection,
+)
 from meshmode.discretization.connection.projection import (
-    L2ProjectionInverseDiscretizationConnection)
+    L2ProjectionInverseDiscretizationConnection,
+)
 from meshmode.discretization.connection.refinement import make_refinement_connection
 from meshmode.discretization.connection.same_mesh import make_same_mesh_connection
 
@@ -50,26 +63,25 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
-        "DiscretizationConnection",
-        "IdentityDiscretizationConnection",
-        "DirectDiscretizationConnection",
-        "ChainedDiscretizationConnection",
-        "L2ProjectionInverseDiscretizationConnection",
-        "NodalToModalDiscretizationConnection",
-        "ModalToNodalDiscretizationConnection",
-
-        "make_same_mesh_connection",
-        "FACE_RESTR_INTERIOR", "FACE_RESTR_ALL",
-        "make_face_restriction",
-        "make_face_to_all_faces_embedding",
-        "make_opposite_face_connection",
-        "make_partition_connection",
-        "make_refinement_connection",
-        "flatten_chained_connection",
-
-        "InterpolationBatch",
-        "DiscretizationConnectionElementGroup",
-        ]
+    "FACE_RESTR_ALL",
+    "FACE_RESTR_INTERIOR",
+    "ChainedDiscretizationConnection",
+    "DirectDiscretizationConnection",
+    "DiscretizationConnection",
+    "DiscretizationConnectionElementGroup",
+    "IdentityDiscretizationConnection",
+    "InterpolationBatch",
+    "L2ProjectionInverseDiscretizationConnection",
+    "ModalToNodalDiscretizationConnection",
+    "NodalToModalDiscretizationConnection",
+    "flatten_chained_connection",
+    "make_face_restriction",
+    "make_face_to_all_faces_embedding",
+    "make_opposite_face_connection",
+    "make_partition_connection",
+    "make_refinement_connection",
+    "make_same_mesh_connection",
+]
 
 __doc__ = """
 Base classes
@@ -125,7 +137,7 @@ def check_connection(actx: ArrayContext, connection: DirectDiscretizationConnect
 
     assert len(connection.groups) == len(to_discr.groups)
 
-    for cgrp, tgrp in zip(connection.groups, to_discr.groups):
+    for cgrp, tgrp in zip(connection.groups, to_discr.groups, strict=True):
         for batch in cgrp.batches:
             fgrp = from_discr.groups[batch.from_group_index]
 

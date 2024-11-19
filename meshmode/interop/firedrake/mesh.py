@@ -29,10 +29,19 @@ from modepy import PN, Simplex, basis_for_space, resampling_matrix
 from pytools import ProcessLogger
 
 from meshmode.interop.firedrake.reference_cell import (
-    get_affine_reference_simplex_mapping, get_finat_element_unit_nodes)
+    get_affine_reference_simplex_mapping,
+    get_finat_element_unit_nodes,
+)
 from meshmode.mesh import (
-    BTAG_ALL, BTAG_INDUCED_BOUNDARY, BoundaryAdjacencyGroup, InteriorAdjacencyGroup,
-    Mesh, NodalAdjacency, SimplexElementGroup)
+    BTAG_ALL,
+    BTAG_INDUCED_BOUNDARY,
+    BoundaryAdjacencyGroup,
+    InteriorAdjacencyGroup,
+    Mesh,
+    NodalAdjacency,
+    SimplexElementGroup,
+    make_mesh,
+)
 
 
 __doc__ = """
@@ -214,7 +223,8 @@ def _get_facet_markers(dm, facets):
 
 
 def _get_firedrake_facial_adjacency_groups(fdrake_mesh_topology,
-                                           cells_to_use=None):
+                                           cells_to_use=None,
+                                           face_id_dtype=None):
     """
     Return facial_adjacency_groups corresponding to
     the given firedrake mesh topology. Note that as we do not
@@ -236,6 +246,8 @@ def _get_firedrake_facial_adjacency_groups(fdrake_mesh_topology,
         by a :mod:`meshmode` :class:`Mesh`.
     """
     top = fdrake_mesh_topology.topology
+    if face_id_dtype is None:
+        face_id_dtype = np.int8
 
     # We only need one group
     # for interconnectivity and one for boundary connectivity.
@@ -247,10 +259,8 @@ def _get_firedrake_facial_adjacency_groups(fdrake_mesh_topology,
     # )
     # and meshmode's facet ordering: obtained from a simplex element group
     import modepy as mp
-    mm_face_vertex_indices = tuple([
-        face.volume_vertex_indices
-        for face in mp.faces_for_shape(mp.Simplex(top.cell_dimension()))
-        ])
+    mm_face_vertex_indices = tuple(face.volume_vertex_indices
+        for face in mp.faces_for_shape(mp.Simplex(top.cell_dimension())))
 
     # map firedrake local face number to meshmode local face number
     fd_loc_fac_nr_to_mm = {}
@@ -283,17 +293,18 @@ def _get_firedrake_facial_adjacency_groups(fdrake_mesh_topology,
 
     int_elements = int_facet_cell.flatten()
     int_neighbors = np.concatenate((int_facet_cell[:, 1], int_facet_cell[:, 0]))
-    int_element_faces = int_fac_loc_nr.flatten().astype(Mesh.face_id_dtype)
+    int_element_faces = int_fac_loc_nr.flatten().astype(face_id_dtype)
     int_neighbor_faces = np.concatenate((int_fac_loc_nr[:, 1],
                                          int_fac_loc_nr[:, 0]))
-    int_neighbor_faces = int_neighbor_faces.astype(Mesh.face_id_dtype)
+    int_neighbor_faces = int_neighbor_faces.astype(face_id_dtype)
     # If only using some of the cells
     from pyop2.datatypes import IntType
     if cells_to_use is not None:
         to_keep = np.isin(int_elements, cells_to_use)
         cells_to_use_inv = dict(zip(cells_to_use,
                                     np.arange(np.size(cells_to_use),
-                                              dtype=IntType)))
+                                              dtype=IntType),
+                                    strict=True))
 
         # Keep the cells that we are using and change old cell index
         # to new cell index
@@ -344,7 +355,7 @@ def _get_firedrake_facial_adjacency_groups(fdrake_mesh_topology,
 
     ext_element_faces = np.array([fd_loc_fac_nr_to_mm[fac_nr] for fac_nr in
                                   top.exterior_facets.local_facet_dat.data],
-                                  dtype=Mesh.face_id_dtype)
+                                  dtype=face_id_dtype)
     # If only using some of the cells, throw away unused cells and
     # move to new cell index
 
@@ -395,7 +406,7 @@ def _get_firedrake_facial_adjacency_groups(fdrake_mesh_topology,
 
     # }}}
 
-    return [[interconnectivity_grp] + exterior_grps]
+    return [[interconnectivity_grp, *exterior_grps]]
 
 # }}}
 
@@ -432,8 +443,7 @@ def _get_firedrake_orientations(fdrake_mesh, unflipped_group, vertices,
     if gdim == tdim:
         # If the co-dimension is 0, :mod:`meshmode` has a convenient
         # function to compute cell orientations
-        from meshmode.mesh.processing import (
-            find_volume_mesh_element_group_orientation)
+        from meshmode.mesh.processing import find_volume_mesh_element_group_orientation
 
         orient = find_volume_mesh_element_group_orientation(vertices,
                                                             unflipped_group)
@@ -450,12 +460,14 @@ def _get_firedrake_orientations(fdrake_mesh, unflipped_group, vertices,
         orient = np.ones(num_cells)
         if normals:
             for i, (normal, vert_indices) in enumerate(
-                    zip(np.array(normals), unflipped_group.vertex_indices)):
+                    zip(np.array(normals), unflipped_group.vertex_indices,
+                        strict=True)):
                 edge = vertices[:, vert_indices[1]] - vertices[:, vert_indices[0]]
                 if np.cross(normal, edge) < 0:
                     orient[i] = -1.0
         elif no_normals_warn:
-            warn("Assuming all elements are positively-oriented.")
+            warn("Assuming all elements are positively-oriented.",
+                 stacklevel=2)
 
     elif tdim == 2 and gdim == 3:
         # In this case we have a 2-surface embedded in 3-space.
@@ -497,8 +509,7 @@ def import_firedrake_mesh(fdrake_mesh, cells_to_use=None,
     The vertex and node coordinates will be the same, as well
     as the cell/element ordering. However, :mod:`firedrake`
     does not require elements to be positively oriented,
-    so any negative elements are flipped
-    as in :func:`meshmode.mesh.processing.flip_simplex_element_group`.
+    so any negative elements are flipped.
 
     The flipped cells/elements are identified by the returned
     *firedrake_orient* array
@@ -603,8 +614,8 @@ build_connection_from_firedrake`.
     # Get all the nodal information we can from the topology
     with ProcessLogger(logger, "Retrieving vertex indices and computing "
                        "NodalAdjacency from firedrake mesh"):
-        vertex_indices, nodal_adjacency = \
-            _get_firedrake_nodal_info(fdrake_mesh, cells_to_use=cells_to_use)
+        vertex_indices, nodal_adjacency = (
+            _get_firedrake_nodal_info(fdrake_mesh, cells_to_use=cells_to_use))
 
         # If only using some cells, vertices may need new indices as many
         # will be removed
@@ -612,9 +623,10 @@ build_connection_from_firedrake`.
             vert_ndx_new2old = np.unique(vertex_indices.flatten())
             vert_ndx_old2new = dict(zip(vert_ndx_new2old,
                                         np.arange(np.size(vert_ndx_new2old),
-                                                  dtype=vertex_indices.dtype)))
-            vertex_indices = \
-                np.vectorize(vert_ndx_old2new.__getitem__)(vertex_indices)
+                                                  dtype=vertex_indices.dtype),
+                                        strict=True))
+            vertex_indices = (
+                np.vectorize(vert_ndx_old2new.__getitem__)(vertex_indices))
 
     with ProcessLogger(logger, "Building (possibly) unflipped "
                        "SimplexElementGroup from firedrake unit nodes/nodes"):
@@ -636,7 +648,7 @@ build_connection_from_firedrake`.
         nodes = np.real(coords.dat.data[cell_node_list])
         # Add extra dim in 1D for shape (nelements, nunit_nodes, dim)
         if tdim == 1:
-            nodes = np.reshape(nodes, nodes.shape + (1,))
+            nodes = np.reshape(nodes, (*nodes.shape, 1))
         # Transpose nodes to have shape (dim, nelements, nunit_nodes)
         nodes = np.transpose(nodes, (2, 0, 1))
 
@@ -690,8 +702,8 @@ build_connection_from_firedrake`.
                                              no_normals_warn=no_normals_warn)
 
     with ProcessLogger(logger, "Flipping group"):
-        from meshmode.mesh.processing import flip_simplex_element_group
-        group = flip_simplex_element_group(vertices, unflipped_group, orient < 0)
+        from meshmode.mesh.processing import flip_element_group
+        group = flip_element_group(vertices, unflipped_group, orient < 0)
 
     # Now, any flipped element had its 0 vertex and 1 vertex exchanged.
     # This changes the local facet nr, so we need to create and then
@@ -707,11 +719,12 @@ build_connection_from_firedrake`.
         elif 1 not in face:
             no_one_face_ndx = iface
 
+    face_id_dtype = np.int8
     with ProcessLogger(logger, "Building (possibly) unflipped "
                        "FacialAdjacencyGroups"):
-        unflipped_facial_adjacency_groups = \
-            _get_firedrake_facial_adjacency_groups(fdrake_mesh,
-                                                   cells_to_use=cells_to_use)
+        unflipped_facial_adjacency_groups = (
+            _get_firedrake_facial_adjacency_groups(
+                fdrake_mesh, cells_to_use=cells_to_use, face_id_dtype=face_id_dtype))
 
     # applied below to take elements and element_faces
     # (or neighbors and neighbor_faces) and flip in any faces that need to
@@ -757,10 +770,15 @@ build_connection_from_firedrake`.
                             elements=fagrp.elements,
                             element_faces=new_element_faces))
 
-    return (Mesh(vertices, [group],
-                 nodal_adjacency=nodal_adjacency,
-                 facial_adjacency_groups=facial_adjacency_groups),
-            orient)
+    mesh = make_mesh(
+        vertices, [group],
+        vertex_id_dtype=vertex_indices.dtype,
+        element_id_dtype=vertex_indices.dtype,
+        face_id_dtype=face_id_dtype,
+        nodal_adjacency=nodal_adjacency,
+        facial_adjacency_groups=facial_adjacency_groups)
+
+    return mesh, orient
 
 # }}}
 
@@ -857,7 +875,8 @@ def export_mesh_to_firedrake(mesh, group_nr=None, comm=None):
         group = mesh.groups[group_nr]
         fd2mm_indices = np.unique(group.vertex_indices.flatten())
         coords = mesh.vertices[:, fd2mm_indices].T
-        mm2fd_indices = dict(zip(fd2mm_indices, np.arange(np.size(fd2mm_indices))))
+        mm2fd_indices = dict(zip(fd2mm_indices, np.arange(np.size(fd2mm_indices)),
+                                 strict=True))
         cells = np.vectorize(mm2fd_indices.__getitem__)(group.vertex_indices)
 
     # Get a dmplex object and then a mesh topology
@@ -958,9 +977,8 @@ def export_mesh_to_firedrake(mesh, group_nr=None, comm=None):
                        " in firedrake nodal order"):
         from meshmode.mesh.processing import get_simplex_element_flip_matrix
         for perm, cells in perm2cells.items():
-            flip_mat = get_simplex_element_flip_matrix(group.order,
-                                                       fd_unit_nodes,
-                                                       perm)
+            flip_mat, _perm = get_simplex_element_flip_matrix(
+                          group.order, fd_unit_nodes, perm)
             flip_mat = np.rint(flip_mat).astype(np.int32)
             resampled_group_nodes[:, cells, :] = \
                 np.matmul(resampled_group_nodes[:, cells, :], flip_mat.T)

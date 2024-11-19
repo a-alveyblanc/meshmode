@@ -105,13 +105,13 @@ def _build_new_group_table(from_conn, to_conn):
         return (-1, -1)
 
     nfrom_groups = len(from_conn.groups)
-    nto_groups = len(to_conn.groups)
+    n_to_groups = len(to_conn.groups)
 
     # construct a table from (old groups) -> (new groups)
     # NOTE: we try to reduce the number of new groups and batches by matching
     # the `result_unit_nodes` and only adding a new batch if necessary
     grp_to_grp = {}
-    batch_info = [[] for i in range(nfrom_groups * nto_groups)]
+    batch_info = [[] for i in range(nfrom_groups * n_to_groups)]
     for (igrp, ibatch), (_, fbatch) in _iterbatches(from_conn.groups):
         for (jgrp, jbatch), (_, tbatch) in _iterbatches(to_conn.groups):
             # compute result_unit_nodes
@@ -132,7 +132,7 @@ def _build_new_group_table(from_conn, to_conn):
             # find new (group, batch)
             (igrp_new, ibatch_new) = find_batch(result_unit_nodes, batch_info)
             if igrp_new < 0:
-                igrp_new = nto_groups * igrp + jgrp
+                igrp_new = n_to_groups * igrp + jgrp
                 ibatch_new = len(batch_info[igrp_new])
 
                 batch_info[igrp_new].append(_ConnectionBatchData(
@@ -151,7 +151,7 @@ def _build_batches(actx, from_bins, to_bins, batch):
     def to_device(x):
         return actx.freeze(actx.from_numpy(np.asarray(x)))
 
-    for ibatch, (from_bin, to_bin) in enumerate(zip(from_bins, to_bins)):
+    for ibatch, (from_bin, to_bin) in enumerate(zip(from_bins, to_bins, strict=True)):
         yield InterpolationBatch(
                 from_group_index=batch[ibatch].from_group_index,
                 from_element_indices=to_device(from_bin),
@@ -196,8 +196,11 @@ def flatten_chained_connection(actx, connection):
         :class:`~meshmode.discretization.connection.DirectDiscretizationConnection`.
     """
     from meshmode.discretization.connection import (
-        DirectDiscretizationConnection, DiscretizationConnectionElementGroup,
-        IdentityDiscretizationConnection, make_same_mesh_connection)
+        DirectDiscretizationConnection,
+        DiscretizationConnectionElementGroup,
+        IdentityDiscretizationConnection,
+        make_same_mesh_connection,
+    )
 
     if not hasattr(connection, "connections"):
         return connection
@@ -245,7 +248,7 @@ def flatten_chained_connection(actx, connection):
 
         # build new groups
         groups = []
-        for igrp, (from_bin, to_bin) in enumerate(zip(from_bins, to_bins)):
+        for igrp, (from_bin, to_bin) in enumerate(zip(from_bins, to_bins, strict=True)):
             groups.append(DiscretizationConnectionElementGroup(
                 list(_build_batches(actx, from_bin, to_bin,
                                     batch_info[igrp]))))
@@ -283,7 +286,9 @@ def make_full_resample_matrix(actx, connection):
         `(connection.from_discr.ndofs, connection.to_discr.ndofs)`.
     """
     from meshmode.discretization.connection.direct import (
-        DirectDiscretizationConnection, make_direct_full_resample_matrix)
+        DirectDiscretizationConnection,
+        make_direct_full_resample_matrix,
+    )
 
     if isinstance(connection, DirectDiscretizationConnection):
         return make_direct_full_resample_matrix(actx, connection)

@@ -23,7 +23,8 @@ THE SOFTWARE.
 """
 
 import logging
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Type, Union
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import numpy as np
 import numpy.linalg as la
@@ -31,7 +32,7 @@ import numpy.linalg as la
 import modepy as mp
 from pytools import deprecate_keyword, log_process
 
-from meshmode.mesh import Mesh, MeshElementGroup
+from meshmode.mesh import Mesh, MeshElementGroup, make_mesh
 from meshmode.mesh.refinement import Refiner
 
 
@@ -154,7 +155,7 @@ def n_gon(n_corners: int, t: np.ndarray) -> np.ndarray:
 
     t = t*n_corners
 
-    result = np.empty((2,)+t.shape)
+    result = np.empty((2, *t.shape))
 
     for side in range(n_corners):
         indices = np.where((side <= t) & (t < side+1))
@@ -256,7 +257,7 @@ def clamp_piecewise(
     # NOTE: Split [0, 1] interval into 5 chunks that have about equal arclength.
     # This is possible because each chunk is a circle arc, so we know its length.
 
-    L = (       # noqa: N806
+    L = (
         inv_gap * r_major
         + inv_gap * r_minor
         + 2 * np.pi * r_cap)
@@ -274,7 +275,7 @@ def clamp_piecewise(
     # first cap
     m_caps0 = np.logical_and(t >= t1, t < t2).astype(t.dtype)
     theta = m_caps0 * (np.pi / 2 + np.pi * (t - (t2 + t1) / 2) / (t2 - t1))
-    R = r_cap * rotation_matrix(-gap)       # noqa: N806
+    R = r_cap * rotation_matrix(-gap)
     f_caps0 = R @ np.stack([
         np.cos(theta) - 1, np.sin(theta)
         ]) + r_major * np.stack([[np.cos(-gap), np.sin(-gap)]]).T
@@ -287,7 +288,7 @@ def clamp_piecewise(
     # second cap
     m_caps1 = (t >= t3).astype(t.dtype)
     theta = m_caps1 * (np.pi / 2 + np.pi * (t - (t3 + t4) / 2) / (t4 - t3))
-    R = r_cap * rotation_matrix(np.pi + gap)        # noqa: N806
+    R = r_cap * rotation_matrix(np.pi + gap)
     f_caps1 = R @ np.stack([
         np.cos(theta) + 1, np.sin(theta)
         ]) + r_major * np.stack([[np.cos(gap), np.sin(gap)]]).T
@@ -370,8 +371,8 @@ starfish = starfish5
 def make_curve_mesh(
         curve_f: Callable[[np.ndarray], np.ndarray],
         element_boundaries: np.ndarray, order: int, *,
-        unit_nodes: Optional[np.ndarray] = None,
-        node_vertex_consistency_tolerance: Optional[Union[float, bool]] = None,
+        unit_nodes: np.ndarray | None = None,
+        node_vertex_consistency_tolerance: float | bool | None = None,
         closed: bool = True,
         return_parametrization_points: bool = False) -> Mesh:
     """
@@ -429,14 +430,14 @@ def make_curve_mesh(
     t = t.ravel()
     nodes = curve_f(t).reshape(vertices.shape[0], nelements, -1)
 
-    from meshmode.mesh import Mesh, SimplexElementGroup
+    from meshmode.mesh import SimplexElementGroup
     egroup = SimplexElementGroup.make_group(
             order,
             vertex_indices=vertex_indices,
             nodes=nodes,
             unit_nodes=unit_nodes)
 
-    mesh = Mesh(
+    mesh = make_mesh(
             vertices=vertices, groups=[egroup],
             node_vertex_consistency_tolerance=node_vertex_consistency_tolerance,
             is_conforming=True)
@@ -454,8 +455,8 @@ def make_curve_mesh(
 @deprecate_keyword("group_factory", "group_cls")
 def make_group_from_vertices(
         vertices: np.ndarray, vertex_indices: np.ndarray, order: int, *,
-        group_cls: Optional[type] = None,
-        unit_nodes: Optional[np.ndarray] = None) -> MeshElementGroup:
+        group_cls: type[MeshElementGroup] | None = None,
+        unit_nodes: np.ndarray | None = None) -> MeshElementGroup:
     # shape: (ambient_dim, nelements, nvertices)
     ambient_dim = vertices.shape[0]
     el_vertices = vertices[:, vertex_indices]
@@ -544,8 +545,8 @@ def make_group_from_vertices(
 
 def generate_icosahedron(
         r: float, order: int, *,
-        node_vertex_consistency_tolerance: Optional[Union[float, bool]] = None,
-        unit_nodes: Optional[np.ndarray] = None) -> Mesh:
+        node_vertex_consistency_tolerance: float | bool | None = None,
+        unit_nodes: np.ndarray | None = None) -> Mesh:
     # https://en.wikipedia.org/w/index.php?title=Icosahedron&oldid=387737307
 
     phi = (1+5**(1/2))/2
@@ -578,16 +579,15 @@ def generate_icosahedron(
     grp = make_group_from_vertices(vertices, vertex_indices, order,
             unit_nodes=unit_nodes)
 
-    from meshmode.mesh import Mesh
-    return Mesh(
+    return make_mesh(
             vertices, [grp],
             node_vertex_consistency_tolerance=node_vertex_consistency_tolerance,
             is_conforming=True)
 
 
 def generate_cube_surface(r: float, order: int, *,
-        node_vertex_consistency_tolerance: Optional[Union[float, bool]] = None,
-        unit_nodes: Optional[np.ndarray] = None) -> Mesh:
+        node_vertex_consistency_tolerance: float | bool | None = None,
+        unit_nodes: np.ndarray | None = None) -> Mesh:
     shape = mp.Hypercube(3)
     vertices = mp.unit_vertices_for_shape(shape)
     vertices *= r / la.norm(vertices, ord=2, axis=0)
@@ -601,8 +601,7 @@ def generate_cube_surface(r: float, order: int, *,
             group_cls=TensorProductElementGroup,
             unit_nodes=unit_nodes)
 
-    from meshmode.mesh import Mesh
-    return Mesh(
+    return make_mesh(
             vertices, [grp],
             node_vertex_consistency_tolerance=node_vertex_consistency_tolerance,
             is_conforming=True)
@@ -614,8 +613,8 @@ def generate_cube_surface(r: float, order: int, *,
 
 def generate_icosphere(r: float, order: int, *,
         uniform_refinement_rounds: int = 0,
-        node_vertex_consistency_tolerance: Optional[Union[float, bool]] = None,
-        unit_nodes: Optional[np.ndarray] = None) -> Mesh:
+        node_vertex_consistency_tolerance: float | bool | None = None,
+        unit_nodes: np.ndarray | None = None) -> Mesh:
     from warnings import warn
     warn("'generate_icosphere' is deprecated and will be removed in 2023. "
             "Use 'generate_sphere' instead.",
@@ -631,9 +630,9 @@ def generate_icosphere(r: float, order: int, *,
 
 def generate_sphere(r: float, order: int, *,
         uniform_refinement_rounds: int = 0,
-        node_vertex_consistency_tolerance: Optional[Union[float, bool]] = None,
-        unit_nodes: Optional[np.ndarray] = None,
-        group_cls: Optional[type] = None) -> Mesh:
+        node_vertex_consistency_tolerance: float | bool | None = None,
+        unit_nodes: np.ndarray | None = None,
+        group_cls: type[MeshElementGroup] | None = None) -> Mesh:
     """
     :arg r: radius of the sphere.
     :arg order: order of the group elements. If *unit_nodes* is also
@@ -678,8 +677,7 @@ def generate_sphere(r: float, order: int, *,
         nodes=grp.nodes * r / np.sqrt(np.sum(grp.nodes**2, axis=0))
         )
 
-    from meshmode.mesh import Mesh
-    return Mesh(
+    return make_mesh(
             vertices, [grp],
             node_vertex_consistency_tolerance=node_vertex_consistency_tolerance,
             is_conforming=True)
@@ -694,8 +692,8 @@ def generate_surface_of_revolution(
         height_discr: np.ndarray,
         angle_discr: np.ndarray,
         order: int, *,
-        node_vertex_consistency_tolerance: Optional[Union[float, bool]] = None,
-        unit_nodes: Optional[np.ndarray] = None) -> Mesh:
+        node_vertex_consistency_tolerance: float | bool | None = None,
+        unit_nodes: np.ndarray | None = None) -> Mesh:
     """Return a cylinder aligned with the "height" axis aligned with the Z axis.
 
     :arg get_radius: A callable function that takes in a 1D array of heights
@@ -732,8 +730,7 @@ def generate_surface_of_revolution(
     grp = make_group_from_vertices(vertices, vertex_indices, order,
                 unit_nodes=unit_nodes)
 
-    from meshmode.mesh import Mesh
-    mesh = Mesh(
+    mesh = make_mesh(
             vertices, [grp],
             node_vertex_consistency_tolerance=node_vertex_consistency_tolerance,
             is_conforming=True)
@@ -752,8 +749,7 @@ def generate_surface_of_revolution(
     grp, = mesh.groups
     grp = replace(grp, nodes=ensure_radius(grp.nodes))
 
-    from meshmode.mesh import Mesh
-    return Mesh(
+    return make_mesh(
             vertices, [grp],
             node_vertex_consistency_tolerance=node_vertex_consistency_tolerance,
             is_conforming=True)
@@ -766,9 +762,9 @@ def generate_surface_of_revolution(
 def generate_torus_and_cycle_vertices(
         r_major: float, r_minor: float,
         n_major: int = 20, n_minor: int = 10, order: int = 1,
-        node_vertex_consistency_tolerance: Optional[Union[float, bool]] = None,
-        unit_nodes: Optional[np.ndarray] = None,
-        group_cls: Optional[type] = None,
+        node_vertex_consistency_tolerance: float | bool | None = None,
+        unit_nodes: np.ndarray | None = None,
+        group_cls: type[MeshElementGroup] | None = None,
         ) -> Mesh:
     a = r_major
     b = r_minor
@@ -857,9 +853,8 @@ def generate_torus_and_cycle_vertices(
     from dataclasses import replace
     grp = replace(grp, vertex_indices=vertex_indices, nodes=nodes)
 
-    from meshmode.mesh import Mesh
     return (
-            Mesh(
+            make_mesh(
                 vertices, [grp],
                 node_vertex_consistency_tolerance=node_vertex_consistency_tolerance,
                 is_conforming=True),
@@ -874,9 +869,9 @@ def generate_torus_and_cycle_vertices(
 def generate_torus(
         r_major: float, r_minor: float,
         n_major: int = 20, n_minor: int = 10, order: int = 1,
-        node_vertex_consistency_tolerance: Optional[Union[float, bool]] = None,
-        unit_nodes: Optional[np.ndarray] = None,
-        group_cls: Optional[type] = None) -> Mesh:
+        node_vertex_consistency_tolerance: float | bool | None = None,
+        unit_nodes: np.ndarray | None = None,
+        group_cls: type[MeshElementGroup] | None = None) -> Mesh:
     r"""Generate a torus.
 
     .. tikz:: A torus with major circle (magenta) and minor circle (red).
@@ -954,7 +949,7 @@ def refine_mesh_and_get_urchin_warper(
             order: int, m: int, n: int, est_rel_interp_tolerance: float,
             min_rad: float = 0.2,
             uniform_refinement_rounds: int = 0
-        ) -> Tuple[Refiner, Callable[[Mesh], Mesh]]:
+        ) -> tuple[Refiner, Callable[[Mesh], Mesh]]:
     """
     :arg order: order of the (simplex) elements.
     :arg m: order of the spherical harmonic :math:`Y^m_n`.
@@ -1007,8 +1002,7 @@ def refine_mesh_and_get_urchin_warper(
             replace(grp, nodes=map_coords(grp.nodes))
             for grp in mesh.groups]
 
-        from meshmode.mesh import Mesh
-        return Mesh(
+        return make_mesh(
                 map_coords(mesh.vertices),
                 groups,
                 node_vertex_consistency_tolerance=False,
@@ -1069,14 +1063,14 @@ def generate_urchin(
 
 @deprecate_keyword("group_factory", "group_cls")
 def generate_box_mesh(
-        axis_coords: Tuple[np.ndarray, ...],
+        axis_coords: tuple[np.ndarray, ...],
         order: int = 1, *,
         coord_dtype: Any = np.float64,
-        periodic: Optional[bool] = None,
-        group_cls: Optional[Type[MeshElementGroup]] = None,
-        boundary_tag_to_face: Optional[Dict[Any, str]] = None,
-        mesh_type: Optional[str] = None,
-        unit_nodes: Optional[np.ndarray] = None) -> Mesh:
+        periodic: bool | None = None,
+        group_cls: type[MeshElementGroup] | None = None,
+        boundary_tag_to_face: dict[Any, str] | None = None,
+        mesh_type: str | None = None,
+        unit_nodes: np.ndarray | None = None) -> Mesh:
     r"""Create a semi-structured mesh.
 
     :arg axis_coords: a tuple with a number of entries corresponding
@@ -1157,7 +1151,7 @@ def generate_box_mesh(
 
     vertex_indices = np.arange(nvertices).reshape(*shape)
 
-    vertices = np.empty((dim,)+shape, dtype=coord_dtype)
+    vertices = np.empty((dim, *shape), dtype=coord_dtype)
     for idim in range(dim):
         vshape = (shape[idim],) + (1,)*(dim-1-idim)
         vertices[idim] = axis_coords[idim].reshape(*vshape)
@@ -1207,7 +1201,7 @@ def generate_box_mesh(
                     nvertices
                     + np.arange(nmidpoints).reshape(*shape_m1, order="F"))
 
-            midpoints = np.empty((dim,)+shape_m1, dtype=coord_dtype)
+            midpoints = np.empty((dim, *shape_m1), dtype=coord_dtype)
             for idim in range(dim):
                 vshape = (shape_m1[idim],) + (1,)*(1-idim)
                 left_axis_coords = axis_coords[idim][:-1]
@@ -1391,15 +1385,13 @@ def generate_box_mesh(
 
     # }}}
 
-    from meshmode.mesh import Mesh
-    mesh = Mesh(vertices, [grp],
+    mesh = make_mesh(vertices, [grp],
             facial_adjacency_groups=facial_adjacency_groups,
             is_conforming=True)
 
     if any(periodic):
         from meshmode import AffineMap
-        from meshmode.mesh.processing import (
-            BoundaryPairMapping, glue_mesh_boundaries)
+        from meshmode.mesh.processing import BoundaryPairMapping, glue_mesh_boundaries
         bdry_pair_mappings_and_tols = []
         for idim in range(dim):
             if periodic[idim]:
@@ -1427,14 +1419,14 @@ def generate_box_mesh(
 def generate_regular_rect_mesh(
         a: Sequence[float] = (0, 0),
         b: Sequence[float] = (1, 1), *,
-        nelements_per_axis: Optional[int] = None,
-        npoints_per_axis: Optional[int] = None,
-        periodic: Optional[bool] = None,
+        nelements_per_axis: int | None = None,
+        npoints_per_axis: int | None = None,
+        periodic: bool | None = None,
         order: int = 1,
-        boundary_tag_to_face: Optional[Dict[Any, str]] = None,
-        group_cls: Optional[Type[MeshElementGroup]] = None,
-        mesh_type: Optional[str] = None,
-        n: Optional[int] = None,
+        boundary_tag_to_face: dict[Any, str] | None = None,
+        group_cls: type[MeshElementGroup] | None = None,
+        mesh_type: str | None = None,
+        n: int | None = None,
         ) -> Mesh:
     """Create a semi-structured rectangular mesh with equispaced elements.
 
@@ -1487,7 +1479,7 @@ def generate_regular_rect_mesh(
             "lower topological dimension and map it.)")
 
     axis_coords = [np.linspace(a_i, b_i, npoints_i)
-            for a_i, b_i, npoints_i in zip(a, b, npoints_per_axis)]
+            for a_i, b_i, npoints_i in zip(a, b, npoints_per_axis, strict=False)]
 
     return generate_box_mesh(axis_coords, order=order,
                              periodic=periodic,
@@ -1502,10 +1494,10 @@ def generate_regular_rect_mesh(
 
 def generate_warped_rect_mesh(
         dim: int, order: int, *,
-        nelements_side: Optional[int] = None,
-        npoints_side: Optional[int] = None,
-        group_cls: Optional[Type[MeshElementGroup]] = None,
-        n: Optional[int] = None) -> Mesh:
+        nelements_side: int | None = None,
+        npoints_side: int | None = None,
+        group_cls: type[MeshElementGroup] | None = None,
+        n: int | None = None) -> Mesh:
     """Generate a mesh of a warped square/cube. Mainly useful for testing
     functionality with curvilinear meshes.
     """
@@ -1559,6 +1551,95 @@ def generate_warped_rect_mesh(
 
 # {{{ generate_annular_cylinder_slice_mesh
 
+def generate_annular_cylinder_mesh(
+        n: int, center: np.ndarray, inner_radius: float, outer_radius: float,
+        nelements_per_axis: int | None = None,
+        periodic: bool = False, group_cls=None, dim: int = 3) -> Mesh:
+    r"""
+    Generate a slice of a 3D annular cylinder for
+    :math:`\theta \in [-\frac{\pi}{4}, \frac{\pi}{4}]`. Optionally periodic in
+    $\theta$.
+    """
+    if nelements_per_axis is None:
+        nelements_per_axis = (n,)*dim
+    boundary_tag_to_face = {
+        "-r": ["-x"],
+        "+r": ["+x"],
+        "-theta": ["-y"],
+        "+theta": ["+y"],
+    }
+    if dim == 3:
+        boundary_tag_to_face["-z"] = ["-z"]
+        boundary_tag_to_face["+z"] = ["+z"]
+    if periodic:
+        boundary_tag_to_face["periodic_-theta"] = ["-y"]
+        boundary_tag_to_face["periodic_+theta"] = ["+y"]
+        if dim == 3:
+            boundary_tag_to_face["periodic_-z"] = ["-z"]
+            boundary_tag_to_face["periodic_+z"] = ["+z"]
+
+    unit_mesh = generate_regular_rect_mesh(
+        a=(0,)*dim,
+        b=(1,)*dim,
+        nelements_per_axis=nelements_per_axis,
+        boundary_tag_to_face = boundary_tag_to_face,
+        group_cls=group_cls)
+
+    def transform3(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        r = inner_radius*(1 - x[0]) + outer_radius*x[0]
+        # theta = -np.pi/4*(1 - x[1]) + np.pi/4*x[1]
+        theta = 2*np.pi*x[1]
+        z = -0.5*(1 - x[2]) + 0.5*x[2]
+        return (
+            center[0] + r*np.cos(theta),
+            center[1] + r*np.sin(theta),
+            center[2] + z)
+
+    def transform2(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        r = inner_radius*(1 - x[0]) + outer_radius*x[0]
+        # theta = -np.pi/4*(1 - x[1]) + np.pi/4*x[1]
+        theta = 2*np.pi*x[1]
+        return (
+            center[0] + r*np.cos(theta),
+            center[1] + r*np.sin(theta))
+
+    from meshmode.mesh.processing import map_mesh
+    if dim == 3:
+        mesh = map_mesh(unit_mesh, lambda x: np.stack(transform3(x)))
+    else:
+        mesh = map_mesh(unit_mesh, lambda x: np.stack(transform2(x)))
+
+    if periodic:
+        from meshmode import AffineMap
+        from meshmode.mesh.processing import (
+            BoundaryPairMapping, glue_mesh_boundaries)
+        bdry_pair_mappings_and_tols = []
+        for idim in range(dim):
+            # if periodic[idim]:
+            if idim == 1:
+                offset = np.zeros(dim, dtype=np.float64)
+                # offset[idim] = axis_coords[idim][-1] - axis_coords[idim][0]
+                bdry_pair_mappings_and_tols.append((
+                    BoundaryPairMapping(
+                        "periodic_-theta",  # + axes[idim],
+                        "periodic_+theta",  # + axes[idim],
+                        AffineMap(offset=offset)),
+                    1e-12))
+            if idim == 2:
+                offset = np.zeros(dim, dtype=np.float64)
+                offset[idim] = 1.0
+                bdry_pair_mappings_and_tols.append((
+                    BoundaryPairMapping(
+                        "periodic_-z",  # + axes[idim],
+                        "periodic_+z",  # + axes[idim],
+                        AffineMap(offset=offset)),
+                    1e-12))
+
+        mesh = glue_mesh_boundaries(mesh, bdry_pair_mappings_and_tols)
+
+    return mesh
+
+
 def generate_annular_cylinder_slice_mesh(
         n: int, center: np.ndarray, inner_radius: float, outer_radius: float,
         periodic: bool = False) -> Mesh:
@@ -1580,7 +1661,7 @@ def generate_annular_cylinder_slice_mesh(
             "+z": ["+z"],
             })
 
-    def transform(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def transform(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         r = inner_radius*(1 - x[0]) + outer_radius*x[0]
         theta = -np.pi/4*(1 - x[1]) + np.pi/4*x[1]
         z = -0.5*(1 - x[2]) + 0.5*x[2]
@@ -1599,8 +1680,7 @@ def generate_annular_cylinder_slice_mesh(
         from meshmode.mesh.tools import AffineMap
         aff_map = AffineMap(matrix, center - matrix @ center)
 
-        from meshmode.mesh.processing import (
-            BoundaryPairMapping, glue_mesh_boundaries)
+        from meshmode.mesh.processing import BoundaryPairMapping, glue_mesh_boundaries
         periodic_mesh = glue_mesh_boundaries(
             mesh, bdry_pair_mappings_and_tols=[
                 (BoundaryPairMapping("-theta", "+theta", aff_map), 1e-12)])
@@ -1616,7 +1696,7 @@ def generate_annular_cylinder_slice_mesh(
 
 @log_process(logger)
 def warp_and_refine_until_resolved(
-        unwarped_mesh_or_refiner: Union[Mesh, Refiner],
+        unwarped_mesh_or_refiner: Mesh | Refiner,
         warp_callable: Callable[[Mesh], Mesh],
         est_rel_interp_tolerance: float) -> Mesh:
     """Given an original ("unwarped") :class:`meshmode.mesh.Mesh` and a
@@ -1630,10 +1710,10 @@ def warp_and_refine_until_resolved(
 
     .. versionadded:: 2018.1
     """
-    from modepy.matrices import vandermonde
+    import modepy as mp
     from modepy.modal_decay import simplex_interp_error_coefficient_estimator_matrix
-    from modepy.modes import simplex_onb
 
+    from meshmode.mesh import SimplexElementGroup
     from meshmode.mesh.refinement import RefinerWithoutAdjacency
 
     if isinstance(unwarped_mesh_or_refiner, RefinerWithoutAdjacency):
@@ -1664,15 +1744,19 @@ def warp_and_refine_until_resolved(
                                          "(NaN or Inf)")
 
         for base_element_nr, egrp in zip(
-                warped_mesh.base_element_nrs, warped_mesh.groups):
-            dim, _ = egrp.unit_nodes.shape
+                warped_mesh.base_element_nrs, warped_mesh.groups,
+                strict=True):
+            if not isinstance(egrp, SimplexElementGroup):
+                raise TypeError(
+                    f"Unsupported element group type: '{type(egrp).__name__}'")
 
             interp_err_est_mat = simplex_interp_error_coefficient_estimator_matrix(
                     egrp.unit_nodes, egrp.order,
                     n_tail_orders=1 if warped_mesh.dim > 1 else 2)
 
-            vdm_inv = la.inv(
-                    vandermonde(simplex_onb(dim, egrp.order), egrp.unit_nodes))
+            basis = mp.orthonormal_basis_for_space(
+                egrp._modepy_space, egrp._modepy_shape)
+            vdm_inv = la.inv(mp.vandermonde(basis.functions, egrp.unit_nodes))
 
             mapping_coeffs = np.einsum("ij,dej->dei", vdm_inv, egrp.nodes)
             mapping_norm_2 = np.sqrt(np.sum(mapping_coeffs**2, axis=-1))

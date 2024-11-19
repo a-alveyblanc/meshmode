@@ -20,7 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -45,6 +45,7 @@ __doc__ = """
 
 def draw_2d_mesh(
         mesh: Mesh, *,
+        rng: np.random.Generator | None = None,
         draw_vertex_numbers: bool = True,
         draw_element_numbers: bool = True,
         draw_nodal_adjacency: bool = False,
@@ -58,6 +59,9 @@ def draw_2d_mesh(
         the mesh group elements.
     """
     assert mesh.ambient_dim == 2
+
+    if rng is None:
+        rng = np.random.default_rng()
 
     import matplotlib.patches as mpatches
     import matplotlib.pyplot as pt
@@ -82,7 +86,7 @@ def draw_2d_mesh(
             pathdata.append(
                 (Path.CLOSEPOLY, (elverts[0, 0], elverts[1, 0])))
 
-            codes, verts = zip(*pathdata)
+            codes, verts = zip(*pathdata, strict=True)
             path = Path(verts, codes)
             patch = mpatches.PathPatch(path, **kwargs)
             pt.gca().add_patch(patch)
@@ -135,8 +139,8 @@ def draw_2d_mesh(
                 start = centroid + 0.15*dx
 
                 mag = np.max(np.abs(dx))
-                start += 0.05*(np.random.rand(2)-0.5)*mag
-                dx += 0.05*(np.random.rand(2)-0.5)*mag
+                start += 0.05*(rng.random(2)-0.5)*mag
+                dx += 0.05*(rng.random(2)-0.5)*mag
 
                 pt.arrow(start[0], start[1], 0.7*dx[0], 0.7*dx[1],
                         length_includes_head=True,
@@ -171,9 +175,9 @@ def draw_2d_mesh(
 def draw_curve(
         mesh: Mesh, *,
         el_bdry_style: str = "o",
-        el_bdry_kwargs: Optional[Dict[str, Any]] = None,
+        el_bdry_kwargs: dict[str, Any] | None = None,
         node_style: str = "x-",
-        node_kwargs: Optional[Dict[str, Any]] = None) -> None:
+        node_kwargs: dict[str, Any] | None = None) -> None:
     """Draw a curve mesh.
 
     :arg el_bdry_kwargs: passed to ``plot`` when drawing elements.
@@ -208,18 +212,26 @@ def draw_curve(
 
 def write_vertex_vtk_file(
         mesh: Mesh, file_name: str, *,
-        compressor: Optional[str] = None,
+        compressor: str | None = None,
         overwrite: bool = False) -> None:
     # {{{ create cell_types
     from pyvisfile.vtk import (
-        VF_LIST_OF_COMPONENTS, VTK_HEXAHEDRON, VTK_LINE, VTK_QUAD, VTK_TETRA,
-        VTK_TRIANGLE, AppendedDataXMLGenerator, DataArray, UnstructuredGrid)
+        VF_LIST_OF_COMPONENTS,
+        VTK_HEXAHEDRON,
+        VTK_LINE,
+        VTK_QUAD,
+        VTK_TETRA,
+        VTK_TRIANGLE,
+        AppendedDataXMLGenerator,
+        DataArray,
+        UnstructuredGrid,
+    )
 
     from meshmode.mesh import SimplexElementGroup, TensorProductElementGroup
 
     cell_types = np.empty(mesh.nelements, dtype=np.uint8)
     cell_types.fill(255)
-    for base_element_nr, egrp in zip(mesh.base_element_nrs, mesh.groups):
+    for base_element_nr, egrp in zip(mesh.base_element_nrs, mesh.groups, strict=True):
         if isinstance(egrp, SimplexElementGroup):
             vtk_cell_type = {
                     1: VTK_LINE,
@@ -234,7 +246,7 @@ def write_vertex_vtk_file(
                     }[egrp.dim]
         else:
             raise NotImplementedError("mesh vtk file writing for "
-                    "element group of type '%s'" % type(egrp).__name__)
+                    f"element group of type '{type(egrp).__name__}'")
 
         cell_types[base_element_nr:base_element_nr + egrp.nelements] = vtk_cell_type
 
@@ -282,7 +294,7 @@ def write_vertex_vtk_file(
         if overwrite:
             os.remove(file_name)
         else:
-            raise FileExistsError("output file '%s' already exists" % file_name)
+            raise FileExistsError(f"output file '{file_name}' already exists")
 
     with open(file_name, "w") as outf:
         AppendedDataXMLGenerator(compressor)(grid).write(outf)
@@ -302,19 +314,18 @@ def mesh_to_tikz(mesh: Mesh) -> str:
     drawel_lines = []
     drawel_lines.append(r"\def\drawelements#1{")
 
-    for base_element_nr, grp in zip(mesh.base_element_nrs, mesh.groups):
+    for base_element_nr, grp in zip(mesh.base_element_nrs, mesh.groups, strict=True):
         for iel, el in enumerate(grp.vertex_indices):
             el_nr = base_element_nr + iel + 1
             elverts = mesh.vertices[:, el]
 
             centroid = np.average(elverts, axis=1)
             lines.append(r"\coordinate (cent%d) at (%s);"
-                    % (el_nr,
-                        ", ".join("%.5f" % (vi) for vi in centroid)))
+                    % (el_nr, ", ".join(f"{vi:.5f}" for vi in centroid)))
 
             for ivert, vert in enumerate(elverts.T):
                 lines.append(r"\coordinate (v%d-%d) at (%s);"
-                        % (el_nr, ivert+1, ", ".join("%.5f" % vi for vi in vert)))
+                        % (el_nr, ivert+1, ", ".join(f"{vi:.5f}" for vi in vert)))
             drawel_lines.append(
                     r"\draw [#1] %s -- cycle;"
                     % " -- ".join(
@@ -342,7 +353,8 @@ def vtk_visualize_mesh(
 
     from meshmode.discretization import Discretization
     from meshmode.discretization.poly_element import (
-        InterpolatoryEdgeClusteredGroupFactory)
+        InterpolatoryEdgeClusteredGroupFactory,
+    )
     discr = Discretization(actx, mesh, InterpolatoryEdgeClusteredGroupFactory(order))
 
     from meshmode.discretization.visualization import make_visualizer
@@ -409,12 +421,10 @@ def visualize_mesh_vertex_resampling_error(
 
     from meshmode.dof_array import DOFArray
     from meshmode.mesh import _mesh_group_node_vertex_error
-    error = DOFArray(actx, tuple([
-        actx.from_numpy(
+    error = DOFArray(actx, tuple(actx.from_numpy(
             np.sqrt(np.sum(_mesh_group_node_vertex_error(mesh, mgrp)**2, axis=0))
         )
-        for mgrp in mesh.groups
-    ]))
+        for mgrp in mesh.groups))
 
     # }}}
 
@@ -422,7 +432,8 @@ def visualize_mesh_vertex_resampling_error(
 
     from meshmode.discretization import Discretization
     from meshmode.discretization.poly_element import (
-        InterpolatoryEdgeClusteredGroupFactory)
+        InterpolatoryEdgeClusteredGroupFactory,
+    )
     discr = Discretization(actx, mesh, InterpolatoryEdgeClusteredGroupFactory(1))
 
     from meshmode.discretization.visualization import make_visualizer

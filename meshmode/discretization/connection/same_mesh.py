@@ -29,8 +29,11 @@ from meshmode.transform_metadata import DiscretizationElementAxisTag
 
 def make_same_mesh_connection(actx, to_discr, from_discr):
     from meshmode.discretization.connection.direct import (
-        DirectDiscretizationConnection, DiscretizationConnectionElementGroup,
-        IdentityDiscretizationConnection, InterpolationBatch)
+        DirectDiscretizationConnection,
+        DiscretizationConnectionElementGroup,
+        IdentityDiscretizationConnection,
+        InterpolationBatch,
+    )
 
     if from_discr.mesh is not to_discr.mesh:
         raise ValueError("from_discr and to_discr must be based on "
@@ -40,7 +43,8 @@ def make_same_mesh_connection(actx, to_discr, from_discr):
         return IdentityDiscretizationConnection(from_discr)
 
     groups = []
-    for igrp, (fgrp, tgrp) in enumerate(zip(from_discr.groups, to_discr.groups)):
+    for igrp, (fgrp, tgrp) in enumerate(
+            zip(from_discr.groups, to_discr.groups, strict=True)):
         from arraycontext.metadata import NameHint
         all_elements = actx.tag(NameHint(f"all_el_ind_grp{igrp}"),
                     actx.tag_axis(0,

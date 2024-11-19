@@ -65,13 +65,14 @@ def main():
 
     from meshmode.discretization import Discretization
     from meshmode.discretization.poly_element import (
-        InterpolatoryQuadratureSimplexGroupFactory)
+        InterpolatoryQuadratureSimplexGroupFactory,
+    )
     group_factory = InterpolatoryQuadratureSimplexGroupFactory(order=order)
     discr = Discretization(actx, mesh, group_factory)
 
     # Get our solution: we will use
-    # Real(e^z) = Real(e^{x+iy})
-    #           = e^x Real(e^{iy})
+    # Real(e^z) = Real(e^{x+i y})
+    #           = e^x Real(e^{i y})
     #           = e^x cos(y)
     nodes = discr.nodes()
     for i in range(len(nodes)):
@@ -92,8 +93,18 @@ def main():
 
     # set up dirichlet laplace problem in fd and solve
     from firedrake import (
-        Constant, DirichletBC, Function, FunctionSpace, TestFunction, TrialFunction,
-        dx, grad, inner, project, solve)
+        Constant,
+        DirichletBC,
+        Function,
+        FunctionSpace,
+        TestFunction,
+        TrialFunction,
+        dx,
+        grad,
+        inner,
+        project,
+        solve,
+    )
 
     # because it's easier to write down the variational problem,
     # we're going to project from our "DG" space

@@ -27,13 +27,19 @@ import numpy as np
 import pytest
 
 from arraycontext import (
-    dataclass_array_container, pytest_generate_tests_for_array_contexts,
-    with_container_arithmetic)
+    dataclass_array_container,
+    flatten,
+    pytest_generate_tests_for_array_contexts,
+    with_container_arithmetic,
+)
 from pytools.obj_array import make_obj_array
+from pytools.tag import Tag
 
 from meshmode import _acf  # noqa: F401
 from meshmode.array_context import (
-    PytestPyOpenCLArrayContextFactory, PytestPytatoPyOpenCLArrayContextFactory)
+    PytestPyOpenCLArrayContextFactory,
+    PytestPytatoPyOpenCLArrayContextFactory,
+)
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import default_simplex_group_factory
 from meshmode.dof_array import DOFArray, array_context_for_pickling, flat_norm
@@ -46,9 +52,10 @@ pytest_generate_tests = pytest_generate_tests_for_array_contexts(
          ])
 
 
-# {{{ test_flatten_unflatten
-
-@with_container_arithmetic(bcast_obj_array=False, rel_comparison=True)
+@with_container_arithmetic(bcast_obj_array=False,
+                           rel_comparison=True,
+                           _bcast_actx_array_type=False,
+                           _cls_has_array_context_attr=True)
 @dataclass_array_container
 @dataclass(frozen=True)
 class MyContainer:
@@ -57,50 +64,11 @@ class MyContainer:
     momentum: np.ndarray
     enthalpy: DOFArray
 
+    __array_ufunc__ = None
+
     @property
     def array_context(self):
         return self.mass.array_context
-
-
-def test_flatten_unflatten(actx_factory):
-    actx = actx_factory()
-
-    if isinstance(actx_factory, PytestPytatoPyOpenCLArrayContextFactory):
-        pytest.skip()
-
-    ambient_dim = 2
-    from meshmode.mesh.generation import generate_regular_rect_mesh
-    mesh = generate_regular_rect_mesh(
-            a=(-0.5,)*ambient_dim,
-            b=(+0.5,)*ambient_dim,
-            nelements_per_axis=(3,)*ambient_dim, order=1)
-    discr = Discretization(actx, mesh, default_simplex_group_factory(ambient_dim, 3))
-    a = np.random.randn(discr.ndofs)
-
-    from meshmode.dof_array import flatten, unflatten
-    a_round_trip = actx.to_numpy(flatten(unflatten(actx, discr, actx.from_numpy(a))))
-    assert np.array_equal(a, a_round_trip)
-
-    from meshmode.dof_array import flatten_to_numpy, unflatten_from_numpy
-    a_round_trip = flatten_to_numpy(actx, unflatten_from_numpy(actx, discr, a))
-    assert np.array_equal(a, a_round_trip)
-
-    x = actx.thaw(discr.nodes())
-    avg_mass = DOFArray(actx, tuple([
-        (np.pi + actx.zeros((grp.nelements, 1), a.dtype)) for grp in discr.groups
-        ]))
-
-    c = MyContainer(name="flatten",
-            mass=avg_mass,
-            momentum=make_obj_array([x, x, x]),
-            enthalpy=x)
-
-    from meshmode.dof_array import unflatten_like
-    c_round_trip = unflatten_like(actx, flatten(c), c)
-    assert flat_norm(c - c_round_trip) < 1.0e-8
-
-
-# }}}
 
 
 # {{{ test_container_norm
@@ -133,33 +101,31 @@ def _get_test_containers(actx, ambient_dim=2):
 @pytest.mark.parametrize("ord", [2, np.inf])
 def test_container_norm(actx_factory, ord):
     actx = actx_factory()
-
     c_test = _get_test_containers(actx)
 
-    # {{{ actx.np.linalg.norm
+    # {{{ flat_norm
 
     from pytools.obj_array import make_obj_array
     c = MyContainer(name="hey", mass=1, momentum=make_obj_array([2, 3]), enthalpy=5)
     c_obj_ary = make_obj_array([c, c])
 
-    n1 = actx.np.linalg.norm(c_obj_ary, ord)
+    n1 = flat_norm(c_obj_ary, ord)
     n2 = np.linalg.norm([1, 2, 3, 5]*2, ord)
     assert abs(n1 - n2) < 1e-12
-
-    # }}}
-
-    # {{{ flat_norm
-
-    # check nested vs actx.np.linalg.norm
-    assert actx.to_numpy(abs(
-            flat_norm(c_test[1], ord=ord)
-            - actx.np.linalg.norm(c_test[1], ord=ord))) < 1e-12
 
     # check nested container with only Numbers (and no actx)
     assert abs(flat_norm(c_obj_ary, ord=ord) - n2) < 1.0e-12
     assert abs(
             flat_norm(np.array([1, 1], dtype=object), ord=ord)
             - np.linalg.norm([1, 1], ord=ord)) < 1.0e-12
+
+    # check nested
+    n1 = actx.to_numpy(flat_norm(c_test[1], ord=ord))
+    n2 = np.linalg.norm([
+        np.linalg.norm(actx.to_numpy(flatten(ary, actx)), ord=ord) for ary in c_test[1]
+        ], ord=ord)
+    assert abs(n1 - n2) < 1e-12
+
     # }}}
 
 # }}}
@@ -169,7 +135,7 @@ def test_container_norm(actx_factory, ord):
 
 def test_dof_array_pickling(actx_factory):
     actx = actx_factory()
-    ary_dof, ary_of_dofs, mat_of_dofs, dc_of_dofs = _get_test_containers(actx)
+    _, _, mat_of_dofs, dc_of_dofs = _get_test_containers(actx)
 
     from pickle import dumps, loads
     with array_context_for_pickling(actx):
@@ -180,9 +146,6 @@ def test_dof_array_pickling(actx_factory):
 
     assert actx.to_numpy(flat_norm(mat_of_dofs - mat2_of_dofs, np.inf)) == 0
     assert actx.to_numpy(flat_norm(dc_of_dofs - dc2_of_dofs, np.inf)) == 0
-
-
-from pytools.tag import Tag
 
 
 class FooTag(Tag):
@@ -202,8 +165,10 @@ def test_dof_array_pickling_tags(actx_factory):
 
     from pickle import dumps, loads
 
-    state = DOFArray(actx, (actx.zeros((10, 10), "float64"),
-                     actx.zeros((10, 10), "float64"),))
+    state = DOFArray(actx, (
+        actx.np.zeros((10, 10), dtype=np.float64),
+        actx.np.zeros((10, 10), dtype=np.float64),
+        ))
 
     state = actx.thaw(actx.freeze(actx.tag(FooTag(), state)))
     state = actx.thaw(actx.freeze(actx.tag_axis(0, FooAxisTag(), state)))

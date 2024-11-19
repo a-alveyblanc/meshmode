@@ -198,10 +198,12 @@ def _find_src_unit_nodes_via_gauss_newton(
     # {{{ test map applier and jacobian
 
     if 0:
+        rng = np.random.default_rng(seed=None)
+
         u = src_unit_nodes
         f = apply_map(u)
         for h in [1e-1, 1e-2]:
-            du = h*np.random.randn(*u.shape)
+            du = h*rng.normal(size=u.shape)
 
             f_2 = apply_map(u+du)
 
@@ -249,15 +251,15 @@ def _find_src_unit_nodes_via_gauss_newton(
 
         if dim == 1:
             # A is df.T
-            ata = np.einsum("iket,jket->ijet", df, df)
-            atb = np.einsum("iket,ket->iet", df, resid)
+            ata = np.einsum("ikes,jkes->ijes", df, df)
+            atb = np.einsum("ikes,kes->ies", df, resid)
 
             df_inv_resid = atb / ata[0, 0]
 
         elif dim == 2:
             # A is df.T
-            ata = np.einsum("iket,jket->ijet", df, df)
-            atb = np.einsum("iket,ket->iet", df, resid)
+            ata = np.einsum("ikes,jkes->ijes", df, df)
+            atb = np.einsum("ikes,kes->ies", df, resid)
 
             det = ata[0, 0]*ata[1, 1] - ata[0, 1]*ata[1, 0]
 
@@ -479,9 +481,9 @@ def make_opposite_face_connection(actx, volume_to_bdry_conn):
                     # {{{ visualization (for debugging)
 
                     if 0:
-                        print("TVE", adj.elements[adj_tgt_flags])
-                        print("TBE", tgt_bdry_element_indices)
-                        print("FVE", src_vol_element_indices)
+                        print("target volume elements:", adj.elements[adj_tgt_flags])
+                        print("target boundary elements:", tgt_bdry_element_indices)
+                        print("neighbor volume elements:", src_vol_element_indices)
                         import matplotlib.pyplot as pt
 
                         from meshmode.mesh.visualization import draw_2d_mesh
@@ -511,7 +513,9 @@ def make_opposite_face_connection(actx, volume_to_bdry_conn):
                     groups[i_tgt_grp].extend(batches)
 
     from meshmode.discretization.connection import (
-        DirectDiscretizationConnection, DiscretizationConnectionElementGroup)
+        DirectDiscretizationConnection,
+        DiscretizationConnectionElementGroup,
+    )
     return DirectDiscretizationConnection(
             from_discr=bdry_discr,
             to_discr=bdry_discr,
@@ -546,7 +550,9 @@ def make_partition_connection(actx, *, local_bdry_conn,
     """
 
     from meshmode.discretization.connection import (
-        DirectDiscretizationConnection, DiscretizationConnectionElementGroup)
+        DirectDiscretizationConnection,
+        DiscretizationConnectionElementGroup,
+    )
     from meshmode.mesh.processing import find_group_indices
 
     local_vol_mesh = local_bdry_conn.from_discr.mesh

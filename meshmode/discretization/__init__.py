@@ -24,12 +24,14 @@ THE SOFTWARE.
 """
 
 from abc import ABC, abstractmethod
-from typing import Hashable, Iterable, Optional, Protocol, runtime_checkable
+from collections.abc import Hashable, Iterable
+from typing import Protocol, runtime_checkable
 from warnings import warn
 
 import numpy as np
 
 import loopy as lp
+import modepy as mp
 from arraycontext import ArrayContext, make_loopy_program, tag_axes
 from pytools import keyed_memoize_in, memoize_in, memoize_method
 from pytools.obj_array import make_obj_array
@@ -38,8 +40,12 @@ from pytools.obj_array import make_obj_array
 from meshmode.dof_array import DOFArray as _DOFArray
 from meshmode.mesh import Mesh as _Mesh, MeshElementGroup as _MeshElementGroup
 from meshmode.transform_metadata import (
-    ConcurrentDOFInameTag, ConcurrentElementInameTag, DiscretizationDOFAxisTag,
-    DiscretizationElementAxisTag, FirstAxisIsElementsTag)
+    ConcurrentDOFInameTag,
+    ConcurrentElementInameTag,
+    DiscretizationDOFAxisTag,
+    DiscretizationElementAxisTag,
+    FirstAxisIsElementsTag,
+)
 
 
 __doc__ = """
@@ -109,21 +115,12 @@ class ElementGroupBase(ABC):
     def __init__(self,
                  mesh_el_group: _MeshElementGroup,
                  order: int,
-                 index: Optional[int] = None) -> None:
+                 ) -> None:
         self.mesh_el_group = mesh_el_group
         self.order = order
-        self._index = index
 
     @property
-    def index(self):
-        warn("Accessing 'index' is deprecated and will be removed in July 2022. "
-             "The index always matches the index in 'Discretization.groups'.",
-             DeprecationWarning, stacklevel=2)
-
-        return self._index
-
-    @property
-    def is_affine(self):
+    def is_affine(self) -> bool:
         """A :class:`bool` flag that is *True* if the local-to-global
         parametrization of all the elements in the group is affine. Based on
         :attr:`meshmode.mesh.MeshElementGroup.is_affine`.
@@ -131,7 +128,7 @@ class ElementGroupBase(ABC):
         return self.mesh_el_group.is_affine
 
     @property
-    def nelements(self):
+    def nelements(self) -> int:
         """The total number of polygonal elements in the
         :class:`meshmode.mesh.MeshElementGroup`.
         """
@@ -139,20 +136,20 @@ class ElementGroupBase(ABC):
 
     @property
     @abstractmethod
-    def nunit_dofs(self):
+    def nunit_dofs(self) -> int:
         """The number of degrees of freedom ("DOFs")
         associated with a single element.
         """
 
     @property
-    def ndofs(self):
+    def ndofs(self) -> int:
         """The total number of degrees of freedom ("DOFs")
         associated with the entire element group.
         """
         return self.nunit_dofs * self.nelements
 
     @property
-    def dim(self):
+    def dim(self) -> int:
         """The number of spatial dimensions in which the functions
         in :attr:`~space` operate.
         """
@@ -160,14 +157,14 @@ class ElementGroupBase(ABC):
 
     @property
     @abstractmethod
-    def shape(self):
+    def shape(self) -> mp.Shape:
         """Returns a subclass of :class:`modepy.Shape` representing
         the reference element defining the element group.
         """
 
     @property
     @abstractmethod
-    def space(self):
+    def space(self) -> mp.FunctionSpace:
         """Returns a :class:`modepy.FunctionSpace` representing
         the underlying polynomial space defined on the element
         group's reference element.
@@ -195,9 +192,7 @@ class ElementGroupFactory(Protocol):
     .. automethod:: __call__
     """
 
-    def __call__(self,
-            mesh_el_group: _MeshElementGroup,
-            index: Optional[int] = None) -> ElementGroupBase:
+    def __call__(self, mesh_el_group: _MeshElementGroup) -> ElementGroupBase:
         """Create a new :class:`~meshmode.discretization.ElementGroupBase`
         for the given *mesh_el_group*.
         """
@@ -223,7 +218,7 @@ class NodalElementGroupBase(ElementGroupBase):
     """
 
     @property
-    def nunit_dofs(self):
+    def nunit_dofs(self) -> int:
         """The number of (nodal) degrees of freedom ("DOFs")
         associated with a single element.
         """
@@ -231,7 +226,7 @@ class NodalElementGroupBase(ElementGroupBase):
 
     @property
     @memoize_method
-    def unit_nodes(self):
+    def unit_nodes(self) -> np.ndarray:
         """Returns a :class:`numpy.ndarray` of shape ``(dim, nunit_dofs)``
         of reference coordinates of interpolation nodes.
 
@@ -248,22 +243,11 @@ class NodalElementGroupBase(ElementGroupBase):
         return result
 
     @abstractmethod
-    def quadrature_rule(self):
+    def quadrature_rule(self) -> mp.Quadrature:
         """Returns a :class:`modepy.Quadrature` object for the
-        element group.
+        element group. This quadrature rule shares the nodes
+        returned by :meth:`unit_nodes`.
         """
-
-    @property
-    def weights(self):
-        """Returns a :class:`numpy.ndarray` of shape ``(nunit_dofs,)``
-        containing quadrature weights applicable on the reference
-        element.
-        """
-        warn("`grp.weights` is deprecated and will be dropped "
-             "in version 2022.x. To access the quadrature weights, use "
-             "`grp.quadrature_rule().weights` instead.",
-             DeprecationWarning, stacklevel=2)
-        return self.quadrature_rule().weights
 
 # }}}
 
@@ -282,34 +266,10 @@ class ElementGroupWithBasis(ElementGroupBase):
     """
 
     @abstractmethod
-    def basis_obj(self):
+    def basis_obj(self) -> mp.Basis:
         """Returns the `modepy.Basis` which spans the underlying
         :attr:`~ElementGroupBase.space`.
         """
-
-    @memoize_method
-    def mode_ids(self):
-        warn("`grp.mode_ids()` is deprecated and will be dropped "
-             "in version 2022.x. To access the basis function mode ids, use "
-             "`grp.basis_obj().mode_ids` instead.",
-             DeprecationWarning, stacklevel=2)
-        return self.basis_obj().mode_ids
-
-    @memoize_method
-    def basis(self):
-        warn("`grp.basis()` is deprecated and will be dropped "
-             "in version 2022.x. To access the basis functions, use "
-             "`grp.basis_obj().functions` instead.",
-             DeprecationWarning, stacklevel=2)
-        return self.basis_obj().functions
-
-    @memoize_method
-    def grad_basis(self):
-        warn("`grp.grad_basis()` is deprecated and will be dropped "
-             "in version 2022.x. To access the basis function gradients, use "
-             "`grp.basis_obj().gradients` instead.",
-             DeprecationWarning, stacklevel=2)
-        return self.basis_obj().gradients
 
     @memoize_method
     def is_orthonormal_basis(self):
@@ -323,14 +283,6 @@ class ElementGroupWithBasis(ElementGroupBase):
             return self.basis_obj().orthonormality_weight() == 1
         except mp.BasisNotOrthonormal:
             return False
-
-    def is_orthogonal_basis(self):
-        warn("`is_orthogonal_basis` is deprecated and will be dropped "
-             "in version 2022.x since orthonormality is the more "
-             "operationally important case. "
-             "Use `is_orthonormal_basis` instead.",
-             DeprecationWarning, stacklevel=2)
-        return self.is_orthonormal_basis()
 
 # }}}
 
@@ -349,32 +301,7 @@ class InterpolatoryElementGroupBase(NodalElementGroupBase,
 
     Inherits from :class:`NodalElementGroupBase` and
     :class:`ElementGroupWithBasis`.
-
-    .. automethod:: mass_matrix
-    .. automethod:: diff_matrices
     """
-
-    @abstractmethod
-    def mass_matrix(self):
-        r"""Return a :class:`numpy.ndarray` of shape
-        ``(nunit_nodes, nunit_nodes)``, which is defined as the
-        operator :math:`M`, with
-
-        .. math::
-
-            M_{ij} = \int_{K} \phi_i \cdot \phi_j \mathrm{d}x,
-
-        where :math:`K` denotes a cell and :math:`\phi_i` is the
-        basis spanning the underlying :attr:`~ElementGroupBase.space`.
-        """
-
-    @abstractmethod
-    def diff_matrices(self):
-        """Return a :attr:`~ElementGroupBase.dim`-long :class:`tuple` of
-        :class:`numpy.ndarray` of shape ``(nunit_nodes, nunit_nodes)``,
-        each of which, when applied to an array of nodal values, take
-        derivatives in the reference :math:`(r, s, t)` directions.
-        """
 
 # }}}
 
@@ -390,7 +317,7 @@ class ModalElementGroupBase(ElementGroupWithBasis):
     """
 
     @property
-    def nunit_dofs(self):
+    def nunit_dofs(self) -> int:
         """The number of (modal) degrees of freedom ("DOFs")
         associated with a single element.
         """
@@ -417,12 +344,9 @@ class Discretization:
 
     .. automethod:: __init__
     .. automethod:: copy
-    .. automethod:: empty
     .. automethod:: zeros
-    .. automethod:: empty_like
     .. automethod:: zeros_like
     .. automethod:: nodes
-    .. automethod:: num_reference_derivative
     .. automethod:: quad_weights
     """
 
@@ -430,7 +354,7 @@ class Discretization:
                  actx: ArrayContext,
                  mesh: _Mesh,
                  group_factory: ElementGroupFactory,
-                 real_dtype: Optional[np.dtype] = None,
+                 real_dtype: np.dtype | None = None,
                  _force_actx_clone: bool = True) -> None:
         """
         :arg actx: an :class:`arraycontext.ArrayContext` used to perform
@@ -474,13 +398,12 @@ class Discretization:
         self._cached_nodes = None
 
     def copy(self,
-             actx: Optional[ArrayContext] = None,
-             mesh: Optional[_Mesh] = None,
-             group_factory: Optional[ElementGroupFactory] = None,
-             real_dtype: Optional[np.dtype] = None) -> "Discretization":
+             actx: ArrayContext | None = None,
+             mesh: _Mesh | None = None,
+             group_factory: ElementGroupFactory | None = None,
+             real_dtype: np.dtype | None = None) -> "Discretization":
         """Creates a new object of the same type with all arguments that are not
-        *None* replaced. The copy is not recursive (e.g. it does not call
-        :meth:`meshmode.mesh.Mesh.copy`).
+        *None* replaced. The copy is not recursive.
         """
 
         return type(self)(
@@ -539,7 +462,7 @@ class Discretization:
                                  for grp in self.groups)))
 
     def empty(self, actx: ArrayContext,
-              dtype: Optional[np.dtype] = None) -> _DOFArray:
+              dtype: np.dtype | None = None) -> _DOFArray:
         """Return an empty :class:`~meshmode.dof_array.DOFArray`.
 
         :arg dtype: type special value 'c' will result in a
@@ -547,13 +470,18 @@ class Discretization:
             *None* (the default), a real vector will be returned.
         """
         if not isinstance(actx, ArrayContext):
-            raise TypeError("'actx' must be an ArrayContext, not '%s'"
-                    % type(actx).__name__)
+            raise TypeError(
+                f"'actx' must be an ArrayContext, not '{type(actx).__name__}'")
 
-        return self._new_array(actx, actx.empty, dtype=dtype)
+        warn(f"'{type(self).__name__}.empty' is deprecated and will be removed "
+             f"in 2025. Use '{type(self).__name__}.zeros' instead.",
+             DeprecationWarning, stacklevel=2)
+
+        # return self._new_array(actx, actx.np.zeros, dtype=dtype)
+        return self._new_array(actx, actx.zeros, dtype=dtype)
 
     def zeros(self, actx: ArrayContext,
-              dtype: Optional[np.dtype] = None) -> _DOFArray:
+              dtype: np.dtype | None = None) -> _DOFArray:
         """Return a zero-initialized :class:`~meshmode.dof_array.DOFArray`.
 
         :arg dtype: type special value 'c' will result in a
@@ -561,26 +489,23 @@ class Discretization:
             *None* (the default), a real vector will be returned.
         """
         if not isinstance(actx, ArrayContext):
-            raise TypeError("'actx' must be an ArrayContext, not '%s'"
-                    % type(actx).__name__)
+            raise TypeError(
+                f"'actx' must be an ArrayContext, not '{type(actx).__name__}'")
 
+        # return self._new_array(actx, actx.np.zeros, dtype=dtype)
         return self._new_array(actx, actx.zeros, dtype=dtype)
 
     def empty_like(self, array: _DOFArray) -> _DOFArray:
-        return self.empty(array.array_context, dtype=array.entry_dtype)
+        warn(f"'{type(self).__name__}.empty_like' is deprecated and will be removed "
+             f"in 2025. Use '{type(self).__name__}.zeros_like' instead.",
+             DeprecationWarning, stacklevel=2)
+
+        actx = array.array_context
+        # return self._new_array(actx, actx.np.zeros, dtype=array.entry_dtype)
+        return self._new_array(actx, actx.zeros, dtype=array.entry_dtype)
 
     def zeros_like(self, array: _DOFArray) -> _DOFArray:
         return self.zeros(array.array_context, dtype=array.entry_dtype)
-
-    def num_reference_derivative(self,
-                                 ref_axes: Iterable[int],
-                                 vec: _DOFArray) -> _DOFArray:
-        warn(
-                "This method is deprecated and will go away in 2022.x. "
-                "Use 'meshmode.discretization.num_reference_derivative' instead.",
-                DeprecationWarning, stacklevel=2)
-
-        return num_reference_derivative(self, ref_axes, vec)
 
     @memoize_method
     def quad_weights(self) -> _DOFArray:
@@ -662,9 +587,8 @@ class Discretization:
                                    NameHint(name_hint)))
 
         result = make_obj_array([
-            _DOFArray(None, tuple([
-                actx.freeze(resample_mesh_nodes(grp, iaxis)) for grp in self.groups
-                ]))
+            _DOFArray(None, tuple(actx.freeze(resample_mesh_nodes(grp, iaxis))
+                      for grp in self.groups))
             for iaxis in range(self.ambient_dim)])
         if cached:
             self._cached_nodes = result
@@ -701,9 +625,12 @@ def num_reference_derivative(
     @keyed_memoize_in(actx,
             (num_reference_derivative, "num_reference_derivative_matrix"),
             lambda grp, gref_axes: grp.discretization_key() + gref_axes)
-    def get_mat(grp, gref_axes):
-        from meshmode.discretization.poly_element import diff_matrices
-        matrices = diff_matrices(grp)
+    def get_mat(grp: ElementGroupBase, gref_axes):
+        if not isinstance(grp, InterpolatoryElementGroupBase):
+            raise ValueError("element groups must be interpolatory "
+                             "to allow taking derivatives")
+
+        matrices = mp.diff_matrices(grp.basis_obj(), grp.unit_nodes)
 
         mat = None
         for ref_axis in gref_axes:

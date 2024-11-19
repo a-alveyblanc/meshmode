@@ -31,11 +31,14 @@ from meshmode import _acf  # noqa: F401
 from meshmode.array_context import PytestPyOpenCLArrayContextFactory
 from meshmode.discretization import Discretization
 from meshmode.discretization.poly_element import (
-    InterpolatoryQuadratureSimplexGroupFactory)
+    InterpolatoryQuadratureSimplexGroupFactory,
+)
 from meshmode.dof_array import DOFArray
 from meshmode.interop.firedrake import (
-    build_connection_from_firedrake, build_connection_to_firedrake,
-    import_firedrake_mesh)
+    build_connection_from_firedrake,
+    build_connection_to_firedrake,
+    import_firedrake_mesh,
+)
 from meshmode.mesh import BTAG_ALL, BTAG_INDUCED_BOUNDARY, Mesh, check_bc_coverage
 
 
@@ -78,13 +81,20 @@ def fspace_degree(request):
 
 def make_mm_mesh(name: str) -> Mesh:
     from meshmode.mesh.io import read_gmsh
-    return read_gmsh(name)
+    from meshmode.mesh.processing import remove_unused_vertices
+    return remove_unused_vertices(read_gmsh(name))
 
 
 def make_firedrake_mesh(name: str):
     from firedrake import (
-        Function, Mesh, SpatialCoordinate, UnitCubeMesh, UnitIntervalMesh,
-        UnitSquareMesh, VectorFunctionSpace)
+        Function,
+        Mesh,
+        SpatialCoordinate,
+        UnitCubeMesh,
+        UnitIntervalMesh,
+        UnitSquareMesh,
+        VectorFunctionSpace,
+    )
 
     if name == "FiredrakeUnitIntervalMesh":
         return UnitIntervalMesh(100)
@@ -319,8 +329,8 @@ def test_bdy_tags(mesh_name, bdy_ids, coord_indices, coord_values,
     if only_convert_bdy:
         from meshmode.interop.firedrake.connection import _get_cells_to_use
         cells_to_use = _get_cells_to_use(square_or_cube_mesh, "on_boundary")
-    mm_mesh, orient = import_firedrake_mesh(square_or_cube_mesh,
-                                            cells_to_use=cells_to_use)
+    mm_mesh, _orient = import_firedrake_mesh(square_or_cube_mesh,
+                                             cells_to_use=cells_to_use)
     # Check disjoint coverage of bdy ids and BTAG_ALL
     check_bc_coverage(mm_mesh, [BTAG_ALL])
     check_bc_coverage(mm_mesh, bdy_ids)
@@ -348,7 +358,7 @@ def test_bdy_tags(mesh_name, bdy_ids, coord_indices, coord_values,
             square_or_cube_mesh.topology.topology_dm,
             square_or_cube_mesh.exterior_facets.facets), return_counts=True)
     assert set(fdrake_bdy_ids) == set(bdy_ids)
-    for bdy_id, fdrake_count in zip(fdrake_bdy_ids, fdrake_counts):
+    for bdy_id, fdrake_count in zip(fdrake_bdy_ids, fdrake_counts, strict=True):
         assert fdrake_count == bdy_id_to_mm_count[bdy_id]
 
     # Now make sure we have identified the correct faces
@@ -359,7 +369,7 @@ def test_bdy_tags(mesh_name, bdy_ids, coord_indices, coord_values,
             if grp.boundary_tag == bdy_id]
         assert len(matching_ext_grps) == 1
         ext_grp = matching_ext_grps[0]
-        for iel, ifac in zip(ext_grp.elements, ext_grp.element_faces):
+        for iel, ifac in zip(ext_grp.elements, ext_grp.element_faces, strict=True):
             el_vert_indices = mm_mesh.groups[0].vertex_indices[iel]
             # numpy nb: have to have comma to use advanced indexing
             face_vert_indices = el_vert_indices[face_vertex_indices[ifac], ]
@@ -410,7 +420,7 @@ def test_from_fd_transfer(actx_factory, fspace_degree,
     eoc_recorders = {(True, d): EOCRecorder() for d in range(dim)}
     if not only_convert_bdy:
         for d in range(dim):
-            eoc_recorders[(False, d)] = EOCRecorder()
+            eoc_recorders[False, d] = EOCRecorder()
 
     def get_fdrake_mesh_and_h_from_par(mesh_par):
         from firedrake import Mesh, UnitCubeMesh, UnitIntervalMesh, UnitSquareMesh
@@ -490,7 +500,7 @@ def test_from_fd_transfer(actx_factory, fspace_degree,
 
             # record fd -> mm error
             err = np.max(np.abs(fd2mm_f - meshmode_f))
-            eoc_recorders[(True, d)].add_data_point(h, err)
+            eoc_recorders[True, d].add_data_point(h, err)
 
             if not only_convert_bdy:
                 # now transport mm -> fd
@@ -499,12 +509,12 @@ def test_from_fd_transfer(actx_factory, fspace_degree,
                 mm2fd_f = fdrake_connection.from_meshmode(meshmode_f_dofarr)
                 # record mm -> fd error
                 err = np.max(np.abs(fdrake_f.dat.data - mm2fd_f.dat.data))
-                eoc_recorders[(False, d)].add_data_point(h, err)
+                eoc_recorders[False, d].add_data_point(h, err)
 
     # assert that order is correct or error is "low enough"
     for ((fd2mm, d), eoc_rec) in eoc_recorders.items():
-        print("\nfiredrake -> meshmode: %s\nvector *x* -> *sin(x[%s])*\n"
-              % (fd2mm, d), eoc_rec)
+        print(f"\nfiredrake -> meshmode: {fd2mm}\nvector *x* -> *sin(x[{d}])*\n",
+              eoc_rec)
         assert (
             eoc_rec.order_estimate() >= fspace_degree
             or eoc_rec.max_error() < 2e-14)
@@ -578,7 +588,7 @@ def test_to_fd_transfer(actx_factory, fspace_degree, mesh_name, mesh_pars, dim):
 
     # assert that order is correct or error is "low enough"
     for d, eoc_rec in eoc_recorders.items():
-        print("\nvector *x* -> *x[%s]*\n" % d, eoc_rec)
+        print(f"\nvector *x* -> *x[{d}]*\n", eoc_rec)
         assert (
             eoc_rec.order_estimate() >= fspace_degree
             or eoc_rec.max_error() < 2e-14)
@@ -600,8 +610,13 @@ def test_from_fd_idempotency(actx_factory,
     actx = actx_factory()
 
     from firedrake import (
-        Function, FunctionSpace, SpatialCoordinate, TensorFunctionSpace,
-        VectorFunctionSpace, as_tensor)
+        Function,
+        FunctionSpace,
+        SpatialCoordinate,
+        TensorFunctionSpace,
+        VectorFunctionSpace,
+        as_tensor,
+    )
 
     # Make a function space and a function with unique values at each node
     fdrake_mesh = make_firedrake_mesh(fdrake_mesh)
@@ -657,7 +672,7 @@ def test_from_fd_idempotency(actx_factory,
                                    atol=CLOSE_ATOL)
     else:
         for dof_arr_cp, dof_arr in zip(mm_field_copy.flatten(),
-                                       mm_field.flatten()):
+                                       mm_field.flatten(), strict=True):
             np.testing.assert_allclose(actx.to_numpy(dof_arr_cp[0]),
                                        actx.to_numpy(dof_arr[0]),
                                        atol=CLOSE_ATOL)

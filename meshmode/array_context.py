@@ -25,19 +25,28 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
 
-import sys
 import logging
 import numpy as np
-
+from typing import (
+    Union,
+    FrozenSet,
+    Tuple,
+    Any,
+    Optional,
+    Callable,
+    TYPE_CHECKING
+)
 from warnings import warn
-from typing import Union, FrozenSet, Tuple, Any, Optional, Callable, TYPE_CHECKING
 
-from arraycontext import PyOpenCLArrayContext as PyOpenCLArrayContextBase
-from arraycontext import PytatoPyOpenCLArrayContext as PytatoPyOpenCLArrayContextBase
+from arraycontext import (
+    PyOpenCLArrayContext as PyOpenCLArrayContextBase,
+    PytatoPyOpenCLArrayContext as PytatoPyOpenCLArrayContextBase,
+)
 from arraycontext.pytest import (
-        _PytestPyOpenCLArrayContextFactoryWithClass,
-        _PytestPytatoPyOpenCLArrayContextFactory,
-        register_pytest_array_context_factory)
+    _PytestPyOpenCLArrayContextFactoryWithClass,
+    _PytestPytatoPyOpenCLArrayContextFactory,
+    register_pytest_array_context_factory,
+)
 from loopy.translation_unit import for_each_kernel
 
 from loopy.tools import memoize_on_disk
@@ -195,7 +204,9 @@ def _transform_loopy_inner(t_unit):
     # {{{ element/dof iname tag
 
     from meshmode.transform_metadata import (
-        ConcurrentDOFInameTag, ConcurrentElementInameTag)
+        ConcurrentDOFInameTag,
+        ConcurrentElementInameTag,
+    )
     el_inames = [iname.name
             for iname in default_ep.inames.values()
             if ConcurrentElementInameTag() in iname.tags]
@@ -307,13 +318,6 @@ class PytestPyOpenCLArrayContextFactory(
     actx_class = PyOpenCLArrayContext
 
 
-# deprecated
-class PytestPyOpenCLArrayContextFactoryWithHostScalars(
-        _PytestPyOpenCLArrayContextFactoryWithClass):
-    actx_class = PyOpenCLArrayContext
-    force_device_scalars = False
-
-
 class PytestPytatoPyOpenCLArrayContextFactory(
         _PytestPytatoPyOpenCLArrayContextFactory):
 
@@ -324,8 +328,6 @@ class PytestPytatoPyOpenCLArrayContextFactory(
 
 register_pytest_array_context_factory("meshmode.pyopencl",
         PytestPyOpenCLArrayContextFactory)
-register_pytest_array_context_factory("meshmode.pyopencl-deprecated",
-        PytestPyOpenCLArrayContextFactoryWithHostScalars)
 register_pytest_array_context_factory("meshmode.pytato_cl",
         PytestPytatoPyOpenCLArrayContextFactory)
 
@@ -359,27 +361,19 @@ _actx_names = (
         )
 
 
-if sys.version_info >= (3, 7):
-    def __getattr__(name):
-        if name not in _actx_names:
-            raise AttributeError(name)
+def __getattr__(name):
+    if name not in _actx_names:
+        raise AttributeError(name)
 
-        import arraycontext
-        result = getattr(arraycontext, name)
+    import arraycontext
+    result = getattr(arraycontext, name)
 
-        warn(f"meshmode.array_context.{name} is deprecated. "
-                f"Use arraycontext.{name} instead. "
-                f"meshmode.array_context.{name} will continue to work until 2022.",
-                DeprecationWarning, stacklevel=2)
+    warn(f"meshmode.array_context.{name} is deprecated. "
+         f"Use arraycontext.{name} instead. "
+         f"meshmode.array_context.{name} will continue to work until 2022.",
+         DeprecationWarning, stacklevel=2)
 
-        return result
-else:
-    def _import_names():
-        import arraycontext
-        for name in _actx_names:
-            globals()[name] = getattr(arraycontext, name)
-
-    _import_names()
+    return result
 
 # }}}
 
@@ -1111,7 +1105,6 @@ def _get_iel_to_idofs(kernel):
         # }}}
 
         # {{{ <iel, idof, iface> loop
-
         elif ((len(insn.within_inames) > 2)
                 and (len(insn.within_inames & iel_inames) == 1)
                 and (len(insn.within_inames & idof_inames) == 1)
@@ -1127,8 +1120,6 @@ def _get_iel_to_idofs(kernel):
             else:
                 raise NotImplementedError("Could not fit into  <iel,idof,iface>"
                                           " loop nest pattern.")
-        # }}}
-
         else:
             print(f"_get_iel_to_idofs: {str(insn)=}")
             raise NotImplementedError(f"Cannot fit loop nest '{insn.within_inames}'"
@@ -1297,6 +1288,9 @@ def _combine_einsum_domains(knl):
     return knl.copy(domains=new_domains)
 
 
+from pytools.persistent_dict import WriteOncePersistentDict
+from pytato.analysis import PytatoKeyBuilder
+
 class FusionContractorArrayContext(
         SingleGridWorkBalancingPytatoArrayContext):
 
@@ -1318,6 +1312,11 @@ class FusionContractorArrayContext(
         self.use_axis_tag_inference_fallback = use_axis_tag_inference_fallback
         self.use_einsum_inference_fallback = use_einsum_inference_fallback
 
+        self.transform_loopy_cache = WriteOncePersistentDict("meshmode-fusion_actx_transform_loopy_cache-v1",
+                key_builder=PytatoKeyBuilder(),
+                safe_sync=False)
+
+>>>>>>> 0224ca91be3777b4a9c68abd5a81dc880cf985f5
     def transform_dag(self, dag):
         import pytato as pt
 
@@ -1685,6 +1684,16 @@ class FusionContractorArrayContext(
         from arraycontext.impl.pytato.compile import FromArrayContextCompile
 
         original_t_unit = t_unit
+        knl = t_unit.default_entrypoint
+
+        try:
+            r = self.transform_loopy_cache[t_unit]
+        except KeyError:
+            logger.debug(f"FusionContractorArrayContext.transform_loopy_program '{knl.name}': cache miss")
+            pass
+        else:
+            logger.info(f"FusionContractorArrayContext.transform_loopy_program '{knl.name}': cache hit")
+            return r
 
         # from loopy.transform.instruction import simplify_indices
         # t_unit = simplify_indices(t_unit)
@@ -1947,7 +1956,6 @@ class FusionContractorArrayContext(
                             knl = lp.split_iname(knl, iel, l_one_size,
                                                  inner_tag="l.1",
                                                  outer_tag="g.0")
-
                 else:
                     knl = lp.split_iname(knl, iel, 32,
                                          outer_tag="g.0", inner_tag="l.0")
@@ -1955,6 +1963,8 @@ class FusionContractorArrayContext(
             t_unit = t_unit.with_kernel(knl)
 
         # }}}
+
+        self.transform_loopy_cache.store_if_not_present(original_t_unit, t_unit)
 
         return t_unit
 

@@ -21,33 +21,39 @@ THE SOFTWARE.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Generic, List, Optional, Sequence, Tuple
+from typing import Generic
 
 import numpy as np
-import numpy.linalg as la
 
 import loopy as lp
-from meshmode.transform_metadata import (
-        ConcurrentElementInameTag, ConcurrentDOFInameTag,
-        DiscretizationElementAxisTag, DiscretizationDOFAxisTag,
-        DiscretizationDOFPickListAxisTag)
-from pytools import memoize_in, keyed_memoize_method
 from arraycontext import (
-    ArrayContext, ArrayOrContainerT, ArrayT, NotAnArrayContainerError,
-    deserialize_container, make_loopy_program, serialize_container, tag_axes)
+    ArrayContext,
+    ArrayOrContainerT,
+    ArrayT,
+    NotAnArrayContainerError,
+    deserialize_container,
+    make_loopy_program,
+    serialize_container,
+    tag_axes,
+)
 from arraycontext.metadata import NameHint
 from pytools import keyed_memoize_method, memoize_in, memoize_method
 
 from meshmode.discretization import Discretization, ElementGroupBase
 from meshmode.dof_array import DOFArray
 from meshmode.transform_metadata import (
-    ConcurrentDOFInameTag, ConcurrentElementInameTag, DiscretizationDOFAxisTag,
-    DiscretizationElementAxisTag)
+    ConcurrentDOFInameTag,
+    ConcurrentElementInameTag,
+    DiscretizationDOFAxisTag,
+    DiscretizationElementAxisTag,
+    DiscretizationDOFPickListAxisTag,
+)
 
 
 def _reshape_and_preserve_tags(
-        actx: ArrayContext, ary: ArrayT, new_shape: Tuple[int, ...]) -> ArrayT:
+        actx: ArrayContext, ary: ArrayT, new_shape: tuple[int, ...]) -> ArrayT:
     try:
         tags = ary.tags
     except AttributeError:
@@ -122,11 +128,11 @@ class InterpolationBatch(Generic[ArrayT]):
     from_element_indices: ArrayT
     to_element_indices: ArrayT
     result_unit_nodes: np.ndarray
-    to_element_face: Optional[int]
+    to_element_face: int | None
 
     def __post_init__(self):
-        self._global_from_element_indices_cache: \
-                Optional[Tuple[ArrayT, ArrayT]] = None
+        self._global_from_element_indices_cache: (
+                tuple[ArrayT, ArrayT] | None) = None
 
     @property
     def nelements(self) -> int:
@@ -134,7 +140,7 @@ class InterpolationBatch(Generic[ArrayT]):
 
     def _global_from_element_indices(
             self, actx: ArrayContext, to_group: ElementGroupBase
-            ) -> Tuple[ArrayT, ArrayT]:
+            ) -> tuple[ArrayT, ArrayT]:
         """Returns a version of :attr:`from_element_indices` that is usable
         without :attr:`to_element_indices`, consisting of a tuple.
         The first entry of the tuple is an array of flags indicating
@@ -254,6 +260,9 @@ class DiscretizationConnectionElementGroup:
 
     def __init__(self, batches):
         self.batches = batches
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.batches})"
 
 # }}}
 
@@ -401,7 +410,7 @@ class DirectDiscretizationConnection(DiscretizationConnection):
     # {{{ _resample_point_pick_indices
 
     def _resample_point_pick_indices(self, to_group_index: int, ibatch_index: int,
-            tol_multiplier: Optional[float] = None):
+            tol_multiplier: float | None = None):
         """If :meth:`_resample_matrix` *R* is a row subset of a permutation
         matrix *P*, return the index subset I so that ``x[I] == R @ x`` up to
         machine epsilon multiplied by *tol_multiplier* (or an internally
@@ -414,38 +423,17 @@ class DirectDiscretizationConnection(DiscretizationConnection):
         ibatch = self.groups[to_group_index].batches[ibatch_index]
         from_grp = self.from_discr.groups[ibatch.from_group_index]
 
-        if tol_multiplier is None:
-            tol_multiplier = 250
-
-        tol = np.finfo(ibatch.result_unit_nodes.dtype).eps * tol_multiplier
-
-        dim, ntgt_nodes = ibatch.result_unit_nodes.shape
-        if dim == 0:
-            assert ntgt_nodes == 1
-            return np.array([0], dtype=np.int32)
-
-        dist_vecs = (ibatch.result_unit_nodes.reshape(dim, -1, 1)
-                - from_grp.unit_nodes.reshape(dim, 1, -1))
-        dists = la.norm(dist_vecs, axis=0, ord=2)
-
-        result = np.zeros(ntgt_nodes, dtype=self.to_discr.mesh.element_id_dtype)
-
-        for irow in range(ntgt_nodes):
-            close_indices, = np.where(dists[irow] < tol)
-
-            if len(close_indices) != 1:
-                return None
-
-            close_index, = close_indices
-            result[irow] = close_index
-
-        return result
+        from meshmode.mesh.tools import find_point_permutation
+        return find_point_permutation(
+                    targets=ibatch.result_unit_nodes,
+                    permutees=from_grp.unit_nodes,
+                    tol_multiplier=tol_multiplier)
 
     @keyed_memoize_method(lambda actx, to_group_index, ibatch_index,
             tol_multiplier=None: (to_group_index, ibatch_index, tol_multiplier))
     def _frozen_resample_point_pick_indices(self, actx: ArrayContext,
             to_group_index: int, ibatch_index: int,
-            tol_multiplier: Optional[float] = None):
+            tol_multiplier: float | None = None):
         result = self._resample_point_pick_indices(
                 to_group_index=to_group_index,
                 ibatch_index=ibatch_index,
@@ -458,7 +446,7 @@ class DirectDiscretizationConnection(DiscretizationConnection):
     # }}}
 
     @memoize_method
-    def is_permutation(self, tol_multiplier: Optional[float] = None) -> bool:
+    def is_permutation(self, tol_multiplier: float | None = None) -> bool:
         """Return *True* if no interpolation is used in applying this connection,
         i.e. if the source unit nodes in the connection
         (cf. :class:`InterpolationBatch.result_unit_nodes`) match up
@@ -473,27 +461,17 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                 for i_tgrp, cgrp in enumerate(self.groups)
                 for i_batch in range(len(cgrp.batches)))
 
-    def full_resample_matrix(self, actx: ArrayContext):
-        from warnings import warn
-        warn("This method is deprecated. Use 'make_direct_full_resample_matrix' "
-                "instead.", DeprecationWarning, stacklevel=2)
-
-        return make_direct_full_resample_matrix(actx, self)
-
     # {{{ _global_point_pick_info_cache
 
     def _per_target_group_pick_info(
             self, actx: ArrayContext, i_tgrp: int
-            ) -> Optional[Sequence[_FromGroupPickData]]:
+            ) -> Sequence[_FromGroupPickData] | None:
         """Returns a list of :class:`_FromGroupPickData`, one per source group
         from which data is to be transferred, or *None*, if conditions for
         this representation are not met.
         """
         cgrp = self.groups[i_tgrp]
         tgrp = self.to_discr.groups[i_tgrp]
-
-        if tgrp.nelements == 1:
-            print("_per_target_group_pick_info: tgrp has 1 element")
 
         batch_dof_pick_lists = [
                 self._resample_point_pick_indices(i_tgrp, i_batch)
@@ -511,16 +489,17 @@ class DirectDiscretizationConnection(DiscretizationConnection):
         if not batch_source_groups:
             return None
 
-        result: List[_FromGroupPickData] = []
+        result: list[_FromGroupPickData] = []
         for source_group_index in batch_source_groups:
             batch_indices_for_this_source_group = [
                     i for i, batch in enumerate(cgrp.batches)
                     if batch.from_group_index == source_group_index]
 
             # {{{ find and weed out duplicate dof pick lists
+            from pytools import unique
 
-            dof_pick_lists = list({tuple(batch_dof_pick_lists[bi])
-                    for bi in batch_indices_for_this_source_group})
+            dof_pick_lists = list(unique(tuple(batch_dof_pick_lists[bi])
+                    for bi in batch_indices_for_this_source_group))
             dof_pick_list_to_index = {
                     p_ind: i for i, p_ind in enumerate(dof_pick_lists)}
             # shape: (number of pick lists, nunit_dofs_tgt)
@@ -541,7 +520,7 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                 if (from_el_indices[to_el_ind] != -1).any():
                     from warnings import warn
                     warn("per-batch target elements not disjoint during "
-                            "attempted merge")
+                         "attempted merge", stacklevel=3)
                     return None
 
                 from_el_indices[to_el_ind] = \
@@ -580,7 +559,7 @@ class DirectDiscretizationConnection(DiscretizationConnection):
 
     def _global_point_pick_info(
             self, actx: ArrayContext
-            ) -> Sequence[Optional[Sequence[_FromGroupPickData]]]:
+            ) -> Sequence[Sequence[_FromGroupPickData] | None]:
         if self._global_point_pick_info_cache is not None:
             return self._global_point_pick_info_cache
 
@@ -736,7 +715,7 @@ class DirectDiscretizationConnection(DiscretizationConnection):
 
         group_arrays = []
         for i_tgrp, (cgrp, group_pick_info) in enumerate(
-                zip(self.groups, self._global_point_pick_info(actx))):
+                zip(self.groups, self._global_point_pick_info(actx), strict=True)):
 
             group_array_contributions = []
 
@@ -744,6 +723,8 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                 group_pick_info = None
 
             if group_pick_info is not None:
+                # group_array_contributions = []
+
                 if actx.permits_advanced_indexing and not _force_use_loopy:
                     for fgpd in group_pick_info:
                         from_element_indices = actx.thaw(fgpd.from_element_indices)
@@ -754,17 +735,17 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                                             1: DiscretizationDOFAxisTag()},
                                         _reshape_and_preserve_tags(
                                             actx, from_element_indices, (-1, 1))),
-                                    actx.thaw(fgpd.dof_pick_lists)[
-                                        actx.thaw(fgpd.dof_pick_list_indices)]
-                                    ]
+                                        actx.thaw(fgpd.dof_pick_lists)[
+                                            actx.thaw(fgpd.dof_pick_list_indices)]
+                                        ]
 
                             if not fgpd.is_surjective:
                                 from_el_present = actx.thaw(fgpd.from_el_present)
                                 grp_ary_contrib = actx.np.where(
                                     tag_axes(actx, {
                                             1: DiscretizationDOFAxisTag()},
-                                        _reshape_and_preserve_tags(
-                                            actx, from_el_present, (-1, 1))),
+                                             _reshape_and_preserve_tags(
+                                        actx, from_el_present, (-1, 1))),
                                     grp_ary_contrib,
                                     0)
 
@@ -816,8 +797,8 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                             batch_result = actx.np.where(
                                     tag_axes(actx, {
                                             1: DiscretizationDOFAxisTag()},
-                                        _reshape_and_preserve_tags(
-                                            actx, from_el_present, (-1, 1))),
+                                    _reshape_and_preserve_tags(
+                                        actx, from_el_present, (-1, 1))),
                                     actx.einsum("ij,ej->ei",
                                         mat, grp_ary[from_element_indices]),
                                     0)
@@ -840,13 +821,13 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                             batch_result = actx.np.where(
                                 tag_axes(actx, {
                                         1: DiscretizationDOFAxisTag()},
-                                    _reshape_and_preserve_tags(
-                                        actx, from_el_present, (-1, 1))),
+                                _reshape_and_preserve_tags(
+                                    actx, from_el_present, (-1, 1))),
                                 from_vec[
                                     tag_axes(actx, {
                                             1: DiscretizationDOFAxisTag()},
-                                        _reshape_and_preserve_tags(
-                                            actx, from_element_indices, (-1, 1))),
+                                    _reshape_and_preserve_tags(
+                                        actx, from_element_indices, (-1, 1))),
                                     pick_list],
                                 0)
                         else:
@@ -876,7 +857,7 @@ class DirectDiscretizationConnection(DiscretizationConnection):
                 group_array = tag_axes(actx, {
                         0: DiscretizationElementAxisTag(),
                         1: DiscretizationDOFAxisTag()},
-                    actx.zeros(
+                    actx.np.zeros(
                         shape=(self.to_discr.groups[i_tgrp].nelements,
                                self.to_discr.groups[i_tgrp].nunit_dofs),
                         dtype=ary.entry_dtype))
@@ -959,12 +940,12 @@ def make_direct_full_resample_matrix(actx, conn):
     from_group_sizes = [
             grp.nelements*grp.nunit_dofs
             for grp in conn.from_discr.groups]
-    from_group_starts = np.cumsum([0] + from_group_sizes)
+    from_group_starts = np.cumsum([0, *from_group_sizes])
 
     tgt_node_nr_base = 0
     mats = []
     for i_tgrp, (tgrp, cgrp) in enumerate(
-            zip(conn.to_discr.groups, conn.groups)):
+            zip(conn.to_discr.groups, conn.groups, strict=True)):
         for i_batch, batch in enumerate(cgrp.batches):
             if not len(batch.from_element_indices):
                 continue
