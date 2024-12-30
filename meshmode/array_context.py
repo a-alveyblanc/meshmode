@@ -1688,7 +1688,7 @@ class FusionContractorArrayContext(
         try:
             r = self.transform_loopy_cache[t_unit]
         except KeyError:
-            logger.debug(f"FusionContractorArrayContext.transform_loopy_program '{knl.name}': cache miss")
+            logger.info(f"FusionContractorArrayContext.transform_loopy_program '{knl.name}': cache miss")
             pass
         else:
             logger.info(f"FusionContractorArrayContext.transform_loopy_program '{knl.name}': cache hit")

@@ -28,6 +28,7 @@ THE SOFTWARE.
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field, replace
+from functools import partial
 from typing import (
     Any,
     ClassVar,
@@ -41,13 +42,14 @@ import numpy as np
 import numpy.linalg as la
 
 import modepy as mp
-from pytools import memoize_method
+from pytools import memoize_method, module_getattr_for_deprecations
 
 from meshmode.mesh.tools import AffineMap, optional_array_equal
 
 
 __doc__ = """
 .. autoclass:: MeshElementGroup
+.. autoclass:: ModepyElementGroup
 .. autoclass:: SimplexElementGroup
 .. autoclass:: TensorProductElementGroup
 
@@ -321,30 +323,37 @@ class MeshElementGroup(ABC):
 
 # {{{ modepy-based element group
 
+# https://stackoverflow.com/a/13624858
+class _classproperty(property):  # noqa: N801
+    def __get__(self, owner_self: Any, owner_cls: type | None = None) -> Any:
+        assert self.fget is not None
+        return self.fget(owner_cls)
+
+
 @dataclass(frozen=True, eq=False)
-class _ModepyElementGroup(MeshElementGroup):
+class ModepyElementGroup(MeshElementGroup):
     """
-    .. attribute:: _modepy_shape_cls
+    .. attribute:: modepy_shape_cls
 
         Must be set by subclasses to generate the correct shape and spaces
         attributes for the group.
 
-    .. attribute:: _modepy_shape
-    .. attribute:: _modepy_space
+    .. attribute:: shape
+    .. attribute:: space
     """
 
-    _modepy_shape_cls: ClassVar[type[mp.Shape]]
-    _modepy_shape: mp.Shape = field(repr=False)
-    _modepy_space: mp.FunctionSpace = field(repr=False)
+    shape_cls: ClassVar[type[mp.Shape]]
+    shape: mp.Shape = field(repr=False)
+    space: mp.FunctionSpace = field(repr=False)
 
     @property
     def nvertices(self) -> int:
-        return self._modepy_shape.nvertices     # pylint: disable=no-member
+        return self.shape.nvertices     # pylint: disable=no-member
 
     @property
     @memoize_method
     def _modepy_faces(self) -> Sequence[mp.Face]:
-        return mp.faces_for_shape(self._modepy_shape)
+        return mp.faces_for_shape(self.shape)
 
     @memoize_method
     def face_vertex_indices(self) -> tuple[tuple[int, ...], ...]:
@@ -352,7 +361,7 @@ class _ModepyElementGroup(MeshElementGroup):
 
     @memoize_method
     def vertex_unit_coordinates(self) -> np.ndarray:
-        return mp.unit_vertices_for_shape(self._modepy_shape).T
+        return mp.unit_vertices_for_shape(self.shape).T
 
     @classmethod
     def make_group(cls,
@@ -361,7 +370,7 @@ class _ModepyElementGroup(MeshElementGroup):
                    nodes: np.ndarray,
                    *,
                    unit_nodes: np.ndarray | None = None,
-                   dim: int | None = None) -> _ModepyElementGroup:
+                   dim: int | None = None) -> ModepyElementGroup:
 
         if unit_nodes is None:
             if dim is None:
@@ -374,7 +383,7 @@ class _ModepyElementGroup(MeshElementGroup):
                 raise ValueError("'dim' does not match 'unit_nodes' dimension")
 
         # pylint: disable=abstract-class-instantiated
-        shape = cls._modepy_shape_cls(dim)
+        shape = cls.shape_cls(dim)
         space = mp.space_for_shape(shape, order)
 
         if unit_nodes is None:
@@ -388,17 +397,29 @@ class _ModepyElementGroup(MeshElementGroup):
                    vertex_indices=vertex_indices,
                    nodes=nodes,
                    unit_nodes=unit_nodes,
-                   _modepy_shape=shape,
-                   _modepy_space=space)
+                   shape=shape,
+                   space=space)
+
+    @_classproperty
+    def _modepy_shape_cls(cls) -> type[mp.Shape]:  # noqa: N805  # pylint: disable=no-self-argument
+        return cls.shape_cls
+
+    @property
+    def _modepy_shape(self) -> mp.Shape:
+        return self.shape
+
+    @property
+    def _modepy_space(self) -> mp.FunctionSpace:
+        return self.space
 
 # }}}
 
 
 @dataclass(frozen=True, eq=False)
-class SimplexElementGroup(_ModepyElementGroup):
+class SimplexElementGroup(ModepyElementGroup):
     r"""Inherits from :class:`MeshElementGroup`."""
 
-    _modepy_shape_cls: ClassVar[type[mp.Shape]] = mp.Simplex
+    shape_cls: ClassVar[type[mp.Shape]] = mp.Simplex
 
     @property
     @memoize_method
@@ -407,10 +428,10 @@ class SimplexElementGroup(_ModepyElementGroup):
 
 
 @dataclass(frozen=True, eq=False)
-class TensorProductElementGroup(_ModepyElementGroup):
+class TensorProductElementGroup(ModepyElementGroup):
     r"""Inherits from :class:`MeshElementGroup`."""
 
-    _modepy_shape_cls: ClassVar[type[mp.Shape]] = mp.Hypercube
+    shape_cls: ClassVar[type[mp.Shape]] = mp.Hypercube
 
     @property
     def is_affine(self) -> bool:
@@ -1159,7 +1180,7 @@ class Mesh:
     # TODO: Once the @property(nodal_adjacency) is past its deprecation period
     # and removed, these can deprecated in favor of non-underscored variants.
 
-    _nodal_adjacency: None | Literal[False] | NodalAdjacency
+    _nodal_adjacency: Literal[False] | NodalAdjacency | None
     """A description of the nodal adjacency of the mesh. This can be *False* if
     no adjacency is known or should be computed, *None* to compute the adjacency
     on demand or a given :class:`NodalAdjacency` instance.
@@ -1168,7 +1189,7 @@ class Mesh:
     """
 
     _facial_adjacency_groups: \
-        None | Literal[False] | tuple[tuple[FacialAdjacencyGroup, ...], ...]
+        Literal[False] | tuple[tuple[FacialAdjacencyGroup, ...], ...] | None
     """A description of the facial adjacency of the mesh. This can be *False* if
     no adjacency is known or should be computed, *None* to compute the adjacency
     on demand or a list of :class:`FacialAdjacencyGroup` instances.
@@ -1205,20 +1226,32 @@ class Mesh:
         if _nodal_adjacency is None:
             if nodal_adjacency is not None:
                 warn("Passing 'nodal_adjacency' is deprecated and will be removed "
-                     "in 2025. Use the underscore '_nodal_adjacency' instead to "
+                     "in 2025. Use the underscored '_nodal_adjacency' instead to "
                      "match the dataclass field.",
                      DeprecationWarning, stacklevel=2)
 
-                _nodal_adjacency = nodal_adjacency
+            actual_nodal_adjacency = nodal_adjacency
+        else:
+            if nodal_adjacency is not None:
+                raise TypeError("passing both _nodal_adjacency and nodal adjacency "
+                                "is not allowed")
+            else:
+                actual_nodal_adjacency = _nodal_adjacency
 
         if _facial_adjacency_groups is None:
             if facial_adjacency_groups is not None:
                 warn("Passing 'facial_adjacency_groups' is deprecated and will be "
-                     "removed in 2025. Use the underscore '_facial_adjacency_groups'"
+                     "removed in 2025. Use the underscored '_facial_adjacency_groups'"
                      " instead to match the dataclass field.",
                      DeprecationWarning, stacklevel=2)
 
-                _facial_adjacency_groups = facial_adjacency_groups
+            actual_facial_adjacency_groups = facial_adjacency_groups
+        else:
+            if facial_adjacency_groups is not None:
+                raise TypeError("passing both _facial_adjacency_groups "
+                                "and facial adjacency_groups is not allowed")
+            else:
+                actual_facial_adjacency_groups = _facial_adjacency_groups
 
         if not factory_constructed:
             warn(f"Calling '{type(self).__name__}(...)' constructor is deprecated. "
@@ -1234,17 +1267,17 @@ class Mesh:
                 is_conforming = None
 
             if not is_conforming:
-                if _nodal_adjacency is None:
-                    _nodal_adjacency = False
-                if _facial_adjacency_groups is None:
-                    _facial_adjacency_groups = False
+                if actual_nodal_adjacency is None:
+                    actual_nodal_adjacency = False
+                if actual_facial_adjacency_groups is None:
+                    actual_facial_adjacency_groups = False
 
             if (
-                    _nodal_adjacency is not False
-                    and _nodal_adjacency is not None):
-                if not isinstance(_nodal_adjacency, NodalAdjacency):
-                    nb_starts, nbs = _nodal_adjacency
-                    _nodal_adjacency = NodalAdjacency(
+                    actual_nodal_adjacency is not False
+                    and actual_nodal_adjacency is not None):
+                if not isinstance(actual_nodal_adjacency, NodalAdjacency):
+                    nb_starts, nbs = actual_nodal_adjacency
+                    actual_nodal_adjacency = NodalAdjacency(
                             neighbors_starts=nb_starts,
                             neighbors=nbs)
 
@@ -1252,10 +1285,10 @@ class Mesh:
                     del nbs
 
             if (
-                    _facial_adjacency_groups is not False
-                    and _facial_adjacency_groups is not None):
-                _facial_adjacency_groups = _complete_facial_adjacency_groups(
-                    _facial_adjacency_groups,
+                    actual_facial_adjacency_groups is not False
+                    and actual_facial_adjacency_groups is not None):
+                actual_facial_adjacency_groups = _complete_facial_adjacency_groups(
+                    actual_facial_adjacency_groups,
                     element_id_dtype,
                     face_id_dtype)
 
@@ -1265,9 +1298,9 @@ class Mesh:
         object.__setattr__(self, "vertex_id_dtype", vertex_id_dtype)
         object.__setattr__(self, "element_id_dtype", element_id_dtype)
         object.__setattr__(self, "face_id_dtype", face_id_dtype)
-        object.__setattr__(self, "_nodal_adjacency", _nodal_adjacency)
+        object.__setattr__(self, "_nodal_adjacency", actual_nodal_adjacency)
         object.__setattr__(self, "_facial_adjacency_groups",
-                           _facial_adjacency_groups)
+                           actual_facial_adjacency_groups)
 
         if __debug__ and not factory_constructed and not skip_tests:
             check_mesh_consistency(
@@ -1488,8 +1521,8 @@ class Mesh:
 # {{{ node-vertex consistency test
 
 def _mesh_group_node_vertex_error(mesh: Mesh, mgrp: MeshElementGroup) -> np.ndarray:
-    if isinstance(mgrp, _ModepyElementGroup):
-        basis = mp.basis_for_space(mgrp._modepy_space, mgrp._modepy_shape).functions
+    if isinstance(mgrp, ModepyElementGroup):
+        basis = mp.basis_for_space(mgrp.space, mgrp.shape).functions
     else:
         raise TypeError(f"unsupported group type: {type(mgrp).__name__}")
 
@@ -1551,7 +1584,7 @@ def _test_node_vertex_consistency(
     :raises InconsistentVerticesError: if the vertices are not consistent.
     """
     for igrp, mgrp in enumerate(mesh.groups):
-        if isinstance(mgrp, _ModepyElementGroup):
+        if isinstance(mgrp, ModepyElementGroup):
             _test_group_node_vertex_consistency_resampling(mesh, igrp, tol=tol)
         else:
             warn("Not implemented: node-vertex consistency check for "
@@ -1703,7 +1736,9 @@ def _match_faces_by_vertices(
     # faces with the same vertices
     order = np.lexsort(face_vertex_indices_increasing)
     diffs = np.diff(face_vertex_indices_increasing[:, order], axis=1)
-    match_indices, = (~np.any(diffs, axis=0)).nonzero()
+    no_diff_flags = ~np.any(diffs, axis=0)
+    assert isinstance(no_diff_flags, np.ndarray)
+    match_indices, = no_diff_flags.nonzero()
 
     return np.stack((order[match_indices], order[match_indices+1]))
 
@@ -2198,7 +2233,7 @@ def is_affine_simplex_group(
         return True
 
     # get matrices
-    basis = mp.basis_for_space(group._modepy_space, group._modepy_shape)
+    basis = mp.basis_for_space(group.space, group.shape)
     vinv = la.inv(mp.vandermonde(basis.functions, group.unit_nodes))
     diff = mp.differentiation_matrices(
             basis.functions, basis.gradients, group.unit_nodes)
@@ -2225,5 +2260,11 @@ def is_affine_simplex_group(
     return bool(norm_inf < abs_tol)
 
 # }}}
+
+
+__getattr__ = partial(module_getattr_for_deprecations, __name__, {
+        "_ModepyElementGroup": ("ModepyElementGroup", ModepyElementGroup, 2026),
+        })
+
 
 # vim: foldmethod=marker

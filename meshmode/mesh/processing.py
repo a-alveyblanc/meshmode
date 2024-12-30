@@ -25,7 +25,7 @@ THE SOFTWARE.
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import reduce
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import numpy.linalg as la
@@ -571,9 +571,9 @@ def find_volume_mesh_element_group_orientation(
         each negatively oriented element.
     """
 
-    from meshmode.mesh import _ModepyElementGroup
+    from meshmode.mesh import ModepyElementGroup
 
-    if not isinstance(grp, _ModepyElementGroup):
+    if not isinstance(grp, ModepyElementGroup):
         raise NotImplementedError(
                 "finding element orientations "
                 "only supported on "
@@ -624,7 +624,8 @@ def find_volume_mesh_element_group_orientation(
 
     from pymbolic.geometric_algebra import MultiVector
 
-    mvs = [MultiVector(vec) for vec in spanning_object_array]
+    mvs: list[MultiVector[np.floating]] = (
+        [MultiVector(vec) for vec in spanning_object_array])
 
     from operator import xor
     outer_prod = -reduce(xor, mvs)      # pylint: disable=invalid-unary-operand-type
@@ -755,7 +756,7 @@ def _get_tensor_product_element_flip_matrix_and_vertex_permutation(
 
     flipped_unit_nodes = np.einsum("ij,jn->in", unit_flip_matrix, grp.unit_nodes)
 
-    basis = mp.basis_for_space(grp._modepy_space, grp._modepy_shape)
+    basis = mp.basis_for_space(grp.space, grp.shape)
     flip_matrix = mp.resampling_matrix(
         basis.functions,
         flipped_unit_nodes,
@@ -1061,7 +1062,8 @@ def _match_vertices(
         for ivertex in range(len(tgt_vertex_indices)):
             tree.insert(ivertex, tgt_vertex_bboxes[:, :, ivertex])
 
-        matched_tgt_vertices = np.full(len(src_vertex_indices), -1)
+        matched_tgt_vertices: np.ndarray[tuple[int, ...], np.dtype[Any]] \
+            = np.full(len(src_vertex_indices), -1)
         for ivertex in range(len(src_vertex_indices)):
             mapped_src_vertex = mapped_src_vertices[:, ivertex]
             matches = np.array(list(tree.generate_matches(mapped_src_vertex)))
