@@ -47,6 +47,7 @@ from arraycontext.pytest import (
     _PytestPytatoPyOpenCLArrayContextFactory,
     register_pytest_array_context_factory,
 )
+from grudge.transform.metadata import TensorProductDOFAxisTag
 from loopy.translation_unit import for_each_kernel
 
 from loopy.tools import memoize_on_disk
@@ -1028,7 +1029,10 @@ def _get_iel_to_idofs(kernel):
                    for iname in kernel.all_inames()
                    if (kernel
                        .inames[iname]
-                       .tags_of_type(DiscretizationDOFAxisTag))
+                       .tags_of_type(DiscretizationDOFAxisTag) or
+                       kernel
+                       .inames[iname]
+                       .tags_of_type(TensorProductDOFAxisTag))
                    }
     iface_inames = {iname
                     for iname in kernel.all_inames()
@@ -1105,6 +1109,7 @@ def _get_iel_to_idofs(kernel):
         # }}}
 
         # {{{ <iel, idof, iface> loop
+
         elif ((len(insn.within_inames) > 2)
                 and (len(insn.within_inames & iel_inames) == 1)
                 and (len(insn.within_inames & idof_inames) == 1)
@@ -1738,21 +1743,6 @@ class FusionContractorArrayContext(
 
         # }}}
 
-        # {{{ force tensor product iname nesting order
-
-        from grudge.array_context import TensorProductDOFAxisTag
-
-        inames_to_tag = []
-        for iname in knl.inames:
-            if knl.iname_tags_of_type(iname, TensorProductDOFAxisTag):
-                tag = list(knl.iname_tags_of_type(iname,
-                                                  TensorProductDOFAxisTag))[0]
-                inames_to_tag.append((iname, f"l.{tag.iaxis}"))
-
-        knl = lp.tag_inames(knl, inames_to_tag)
-
-        # }}}
-
         # {{{ loop fusion
 
         with ProcessLogger(logger, "Loop Fusion"):
@@ -1930,7 +1920,7 @@ class FusionContractorArrayContext(
                                              inner_tag="l.1", outer_tag="g.0")
                     else:
                         if len(idofs) <= 2:
-                            for i,idof in enumerate(idofs):
+                            for i, idof in enumerate(idofs):
                                 knl = lp.split_iname(knl, idof, l_zero_size,
                                                      inner_tag=f"l.{i}",
                                                      outer_tag="unr")
