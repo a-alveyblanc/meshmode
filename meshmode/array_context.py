@@ -1906,45 +1906,30 @@ class FusionContractorArrayContext(
             knl = t_unit.default_entrypoint
             for iel, idofs in sorted(iel_to_idofs.items()):
                 if idofs:
-                    nunit_dofs = {knl.get_constant_iname_length(idof)
-                                  for idof in idofs}
-                    l_one_size, l_zero_size = _get_group_size_for_dof_array_loop(
-                        nunit_dofs)
-
                     if len(idofs) == 1:
+                        nunit_dofs = {
+                            knl.get_constant_iname_length(idof)
+                            for idof in idofs
+                        }
+                        l_one, l_zero = _get_group_size_for_dof_array_loop(
+                            nunit_dofs)
+
                         idof, = idofs
 
-                        knl = lp.split_iname(knl, idof, l_zero_size,
+                        knl = lp.split_iname(knl, idof, l_zero,
                                              inner_tag="l.0", outer_tag="unr")
-                        knl = lp.split_iname(knl, iel, l_one_size,
+                        knl = lp.split_iname(knl, iel, l_one,
                                              inner_tag="l.1", outer_tag="g.0")
                     else:
-                        if len(idofs) <= 2:
-                            for i, idof in enumerate(idofs):
-                                knl = lp.split_iname(knl, idof, l_zero_size,
-                                                     inner_tag=f"l.{i}",
-                                                     outer_tag="unr")
+                        iname_to_tags = {iel: "g.0"}
+                        iname_to_tags.update({
+                            idof: f"l.{i}"
+                            for i, idof in enumerate(
+                                sorted(idofs, reverse=True)[:2])
+                        })
 
-                            knl = lp.split_iname(knl, iel, l_one_size,
-                                                 inner_tag=f"l.{len(idofs)}",
-                                                 outer_tag="g.0")
-                        else:
-                            new_iname = ("_").join([idof for idof in idofs])
+                        knl = lp.tag_inames(knl, iname_to_tags)
 
-                            # get new sizes for l.0, l.1
-                            new_sizes = _get_group_size_for_dof_array_loop(1)
-                            l_one_size, l_zero_size = new_sizes
-
-                            knl = lp.join_inames(knl, list(idofs),
-                                                 new_iname=new_iname)
-
-                            knl = lp.split_iname(knl, new_iname, l_zero_size,
-                                                 inner_tag="l.0",
-                                                 outer_tag="unr")
-
-                            knl = lp.split_iname(knl, iel, l_one_size,
-                                                 inner_tag="l.1",
-                                                 outer_tag="g.0")
                 else:
                     knl = lp.split_iname(knl, iel, 32,
                                          outer_tag="g.0", inner_tag="l.0")
