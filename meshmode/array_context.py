@@ -934,6 +934,17 @@ def fuse_same_discretization_entity_loops(knl):
                                           True,
                                           orig_knl)
 
+    knl = _fuse_loops_over_a_discr_entity(knl,
+                                          TensorProductDOFAxisTag,
+                                          "idof_tp",
+                                          False,
+                                          orig_knl)
+
+    knl = _fuse_loops_over_a_discr_entity(knl, TensorProductDOFAxisTag,
+                                          "idof_tp",
+                                          True,
+                                          orig_knl)
+
     return knl
 
 
@@ -1125,6 +1136,9 @@ def _get_iel_to_idofs(kernel):
             else:
                 raise NotImplementedError("Could not fit into  <iel,idof,iface>"
                                           " loop nest pattern.")
+
+        # }}}
+
         else:
             print(f"_get_iel_to_idofs: {str(insn)=}")
             raise NotImplementedError(f"Cannot fit loop nest '{insn.within_inames}'"
@@ -1921,14 +1935,23 @@ class FusionContractorArrayContext(
                         knl = lp.split_iname(knl, iel, l_one,
                                              inner_tag="l.1", outer_tag="g.0")
                     else:
-                        iname_to_tags = {iel: "g.0"}
-                        iname_to_tags.update({
+                        def idof_tp_sort_key(idof):
+                            tag, = knl.inames[idof].tags_of_type(
+                                TensorProductDOFAxisTag
+                            )
+                            return tag.iaxis
+
+                        inames_to_tags = {iel: "g.0"}
+                        inames_to_tags.update({
                             idof: f"l.{i}"
                             for i, idof in enumerate(
-                                sorted(idofs, reverse=True)[:2])
+                                sorted(idofs,
+                                       reverse=False,
+                                       key=idof_tp_sort_key)[:-1]
+                            )
                         })
 
-                        knl = lp.tag_inames(knl, iname_to_tags)
+                        knl = lp.tag_inames(knl, inames_to_tags)
 
                 else:
                     knl = lp.split_iname(knl, iel, 32,
