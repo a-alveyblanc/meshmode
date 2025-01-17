@@ -47,7 +47,11 @@ from arraycontext.pytest import (
     _PytestPytatoPyOpenCLArrayContextFactory,
     register_pytest_array_context_factory,
 )
-from grudge.transform.metadata import TensorProductDOFAxisTag
+from grudge.transform.metadata import (
+    TensorProductDOFAxisTag,
+    TensorProductOperatorAxisTag,
+    TensorProductOperatorTag
+)
 from loopy.translation_unit import for_each_kernel
 
 from loopy.tools import memoize_on_disk
@@ -939,8 +943,8 @@ def fuse_same_discretization_entity_loops(knl):
                                           "idof_tp",
                                           False,
                                           orig_knl)
-
-    knl = _fuse_loops_over_a_discr_entity(knl, TensorProductDOFAxisTag,
+    knl = _fuse_loops_over_a_discr_entity(knl,
+                                          TensorProductDOFAxisTag,
                                           "idof_tp",
                                           True,
                                           orig_knl)
@@ -1308,7 +1312,7 @@ def _combine_einsum_domains(knl):
 
 
 from pytools.persistent_dict import WriteOncePersistentDict
-from pytato.analysis import PytatoKeyBuilder
+from pytato.analysis import PytatoKeyBuilder, get_num_nodes
 
 class FusionContractorArrayContext(
         SingleGridWorkBalancingPytatoArrayContext):
@@ -1337,6 +1341,8 @@ class FusionContractorArrayContext(
 
     def transform_dag(self, dag):
         import pytato as pt
+
+        initial_node_count = get_num_nodes(dag)
 
         # {{{ Remove FEMEinsumTags that might have been propagated
 
@@ -1411,6 +1417,28 @@ class FusionContractorArrayContext(
         with ProcessLogger(logger, "transform_dag.deduplicate_data_wrappers"):
             dag = pt.transform.deduplicate_data_wrappers(dag)
 
+        # {{{ freeze and thaw tensor product operators
+
+        # FIXME: this hacky solution will do for now (operators are small so
+        # this should not degrade performance at all)
+        def thaw_freeze_tp_operators(expr):
+            if isinstance(expr, pt.Einsum) and \
+                    expr.tags_of_type(TensorProductOperatorTag):
+                ref_mass_inv, stiff_t = expr.args
+                data = self.to_numpy(ref_mass_inv) @ self.to_numpy(stiff_t)
+                axis_tags = (TensorProductOperatorAxisTag(),)
+                return self.from_numpy(data).copy(
+                    axes=(
+                        pt.Axis(tags=frozenset(axis_tags)),
+                        pt.Axis(tags=frozenset(axis_tags))
+                    )
+                ).tagged(TensorProductOperatorTag())
+            return expr
+
+        dag = pt.transform.map_and_copy(dag, thaw_freeze_tp_operators)
+
+        # }}}
+
         # {{{ get rid of copies for different views of a cl-array
 
         def eliminate_reshapes_of_data_wrappers(ary):
@@ -1441,6 +1469,17 @@ class FusionContractorArrayContext(
                                   vec.tagged(pt.tags.ImplStored()))
                         .tagged((pt.tags.ImplStored(),
                                  pt.tags.PrefixNamed("face_mass"))))
+            elif (isinstance(expr, pt.Einsum)
+                    and pt.analysis.is_einsum_similar_to_subscript(
+                            expr,
+                            "ifj,fej->ei")):
+                mat, vec = expr.args
+                return (pt.einsum("ifj,fej->ei",
+                                  mat,
+                                  vec.tagged(pt.tags.ImplStored()))
+                        .tagged((pt.tags.ImplStored(),
+                                 pt.tags.PrefixNamed("face_mass"))))
+
             else:
                 return expr
 
@@ -1451,20 +1490,42 @@ class FusionContractorArrayContext(
 
         # }}}
 
-        # {{{ materialize inverse mass inputs
+        # {{{ materialize operator application inputs
 
         def materialize_inverse_mass_inputs(expr):
+            def is_tp_einsum(expr):
+                if pt.analysis.is_einsum_similar_to_subscript(
+                        expr, "il,eljk->eijk"):
+                    return True
+                elif pt.analysis.is_einsum_similar_to_subscript(
+                        expr, "jl,eilk->eijk"):
+                    return True
+                elif pt.analysis.is_einsum_similar_to_subscript(
+                        expr, "kl,eijl->eijk"):
+                    return True
+                return False
+
             if (isinstance(expr, pt.Einsum)
                     and pt.analysis.is_einsum_similar_to_subscript(
                             expr,
-                            "ei,ij,ej->ei")):
-                arg1, arg2, arg3 = expr.args
-                if not arg3.tags_of_type(pt.tags.PrefixNamed):
-                    arg3 = arg3.tagged(pt.tags.PrefixNamed("mass_inv_inp"))
-                if not arg3.tags_of_type(pt.tags.ImplStored):
-                    arg3 = arg3.tagged(pt.tags.ImplStored())
+                            "ij,ej->ei")):
+                arg1, arg2 = expr.args
+                if not arg2.tags_of_type(pt.tags.PrefixNamed):
+                    arg2 = arg2.tagged(pt.tags.PrefixNamed("input_vec"))
+                if not arg2.tags_of_type(pt.tags.ImplStored):
+                    arg2 = arg2.tagged(pt.tags.ImplStored())
 
-                return expr.copy(args=(arg1, arg2, arg3))
+                return expr.copy(args=(arg1, arg2))
+
+            elif (isinstance(expr, pt.Einsum) and is_tp_einsum(expr)):
+                mat, vec = expr.args
+                if not vec.tags_of_type(pt.tags.PrefixNamed):
+                    vec = vec.tagged(pt.tags.PrefixNamed("input_vec_tp"))
+                if not vec.tags_of_type(pt.tags.ImplStored):
+                    vec = vec.tagged(pt.tags.ImplStored())
+
+                return expr.copy(args=(mat, vec))
+
             else:
                 return expr
 
@@ -1694,6 +1755,15 @@ class FusionContractorArrayContext(
 
         # }}}
 
+        final_node_count = get_num_nodes(dag)
+        with ProcessLogger(logger, "final node count"):
+            logger.info(
+                "Final DAG size: %d nodes, started with %d nodes, %s %d nodes",
+                final_node_count, initial_node_count,
+                ("added" if initial_node_count < final_node_count else
+                 "removed"), abs(initial_node_count - final_node_count)
+            )
+
         return dag
 
     def transform_loopy_program(self, t_unit):
@@ -1877,7 +1947,8 @@ class FusionContractorArrayContext(
         t_unit = t_unit.with_kernel(knl)
         del knl
 
-        if False and t_unit.default_entrypoint.tags_of_type(FromArrayContextCompile):
+        if False and t_unit.default_entrypoint.tags_of_type(
+                FromArrayContextCompile):
             # FIXME: Enable this branch, WIP for now and hence disabled it.
             from loopy.match import ObjTagged
             import feinsum as fnsm
@@ -1945,9 +2016,7 @@ class FusionContractorArrayContext(
                         inames_to_tags.update({
                             idof: f"l.{i}"
                             for i, idof in enumerate(
-                                sorted(idofs,
-                                       reverse=False,
-                                       key=idof_tp_sort_key)[:-1]
+                                sorted(idofs, key=idof_tp_sort_key)[:-1]
                             )
                         })
 
