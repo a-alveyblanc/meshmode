@@ -906,6 +906,8 @@ def fuse_same_discretization_entity_loops(knl):
     # transforming it.
     orig_knl = knl
 
+    import time
+
     knl = _fuse_loops_over_a_discr_entity(knl, DiscretizationFaceAxisTag,
                                           "iface",
                                           False,
@@ -920,6 +922,7 @@ def fuse_same_discretization_entity_loops(knl):
                                           "idof",
                                           False,
                                           orig_knl)
+
     knl = _fuse_loops_over_a_discr_entity(knl, DiscretizationDimAxisTag,
                                           "idim",
                                           False,
@@ -929,10 +932,12 @@ def fuse_same_discretization_entity_loops(knl):
                                           "iface",
                                           True,
                                           orig_knl)
+
     knl = _fuse_loops_over_a_discr_entity(knl, DiscretizationDOFAxisTag,
                                           "idof",
                                           True,
                                           orig_knl)
+
     knl = _fuse_loops_over_a_discr_entity(knl, DiscretizationDimAxisTag,
                                           "idim",
                                           True,
@@ -943,6 +948,7 @@ def fuse_same_discretization_entity_loops(knl):
                                           "idof_tp",
                                           False,
                                           orig_knl)
+
     knl = _fuse_loops_over_a_discr_entity(knl,
                                           TensorProductDOFAxisTag,
                                           "idof_tp",
@@ -2001,10 +2007,9 @@ class FusionContractorArrayContext(
 
                         idof, = idofs
 
-                        knl = lp.split_iname(knl, idof, l_zero,
-                                             inner_tag="l.0", outer_tag="unr")
-                        knl = lp.split_iname(knl, iel, l_one,
-                                             inner_tag="l.1", outer_tag="g.0")
+                        knl = lp.tag_inames(knl, {idof: "l.0"})
+                        knl = lp.tag_inames(knl, {iel: "g.0"})
+
                     else:
                         def idof_tp_sort_key(idof):
                             tag, = knl.inames[idof].tags_of_type(
