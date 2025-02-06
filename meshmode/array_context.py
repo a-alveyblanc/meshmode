@@ -1323,6 +1323,8 @@ from pytato.analysis import PytatoKeyBuilder, get_num_nodes
 class FusionContractorArrayContext(
         SingleGridWorkBalancingPytatoArrayContext):
 
+    t_units = []
+
     def __init__(
             self, queue: "cl.CommandQueue", allocator=None, *,
             use_memory_pool: Optional[bool] = None,
@@ -1433,12 +1435,13 @@ class FusionContractorArrayContext(
                 ref_mass_inv, stiff_t = expr.args
                 data = self.to_numpy(ref_mass_inv) @ self.to_numpy(stiff_t)
                 axis_tags = (TensorProductOperatorAxisTag(),)
-                return self.from_numpy(data).copy(
+                return (self.from_numpy(data).copy(
                     axes=(
                         pt.Axis(tags=frozenset(axis_tags)),
                         pt.Axis(tags=frozenset(axis_tags))
                     )
                 ).tagged(TensorProductOperatorTag())
+                 .tagged(pt.tags.PrefixNamed("diff_op")))
             return expr
 
         dag = pt.transform.map_and_copy(dag, thaw_freeze_tp_operators)
@@ -1474,7 +1477,7 @@ class FusionContractorArrayContext(
                                   jac,
                                   vec.tagged(pt.tags.ImplStored()))
                         .tagged((pt.tags.ImplStored(),
-                                 pt.tags.PrefixNamed("face_mass"))))
+                                 pt.tags.PrefixNamed("face_mass_result"))))
             elif (isinstance(expr, pt.Einsum)
                     and pt.analysis.is_einsum_similar_to_subscript(
                             expr,
@@ -1484,8 +1487,7 @@ class FusionContractorArrayContext(
                                   mat,
                                   vec.tagged(pt.tags.ImplStored()))
                         .tagged((pt.tags.ImplStored(),
-                                 pt.tags.PrefixNamed("face_mass"))))
-
+                                 pt.tags.PrefixNamed("face_mass_result"))))
             else:
                 return expr
 
@@ -2007,8 +2009,12 @@ class FusionContractorArrayContext(
 
                         idof, = idofs
 
-                        knl = lp.tag_inames(knl, {idof: "l.0"})
-                        knl = lp.tag_inames(knl, {iel: "g.0"})
+                        knl = lp.split_iname(knl, iel, l_one,
+                                             inner_tag="l.1",
+                                             outer_tag="g.0")
+                        knl = lp.split_iname(knl, idof, l_zero,
+                                             inner_tag="for",
+                                             outer_tag="l.0")
 
                     else:
                         def idof_tp_sort_key(idof):
