@@ -48,7 +48,11 @@ from arraycontext.pytest import (
     register_pytest_array_context_factory,
 )
 from grudge.transform.metadata import (
+    FaceMassOperatorTag,
+    MassInverseOperatorTag,
     TensorProductDOFAxisTag,
+    TensorProductMassInverseOperatorTag,
+    TensorProductMassOperatorTag,
     TensorProductOperatorAxisTag,
     TensorProductOperatorTag
 )
@@ -1427,8 +1431,7 @@ class FusionContractorArrayContext(
 
         # {{{ freeze and thaw tensor product operators
 
-        # FIXME: this hacky solution will do for now (operators are small so
-        # this should not degrade performance at all)
+        # FIXME: this is a hack
         def thaw_freeze_tp_operators(expr):
             if isinstance(expr, pt.Einsum) and \
                     expr.tags_of_type(TensorProductOperatorTag):
@@ -1472,22 +1475,24 @@ class FusionContractorArrayContext(
                             expr,
                             "ifj,fej,fej->ei")):
                 mat, jac, vec = expr.args
-                return (pt.einsum("ifj,fej,fej->ei",
-                                  mat,
-                                  jac,
-                                  vec.tagged(pt.tags.ImplStored()))
-                        .tagged((pt.tags.ImplStored(),
-                                 pt.tags.PrefixNamed("face_mass_result"))))
+                if mat.tags_of_type(FaceMassOperatorTag):
+                    return (pt.einsum("ifj,fej,fej->ei",
+                                      mat,
+                                      jac,
+                                      vec.tagged(pt.tags.ImplStored()))
+                            .tagged((pt.tags.ImplStored(),
+                                     pt.tags.PrefixNamed("face_mass_result"))))
             elif (isinstance(expr, pt.Einsum)
                     and pt.analysis.is_einsum_similar_to_subscript(
                             expr,
                             "ifj,fej->ei")):
                 mat, vec = expr.args
-                return (pt.einsum("ifj,fej->ei",
-                                  mat,
-                                  vec.tagged(pt.tags.ImplStored()))
-                        .tagged((pt.tags.ImplStored(),
-                                 pt.tags.PrefixNamed("face_mass_result"))))
+                if mat.tags_of_type(FaceMassOperatorTag):
+                    return (pt.einsum("ifj,fej->ei",
+                                      mat,
+                                      vec.tagged(pt.tags.ImplStored()))
+                            .tagged((pt.tags.ImplStored(),
+                                     pt.tags.PrefixNamed("face_mass_result"))))
             else:
                 return expr
 
@@ -1498,7 +1503,7 @@ class FusionContractorArrayContext(
 
         # }}}
 
-        # {{{ materialize operator application inputs
+        # {{{ materialize inverse mass inputs
 
         def materialize_inverse_mass_inputs(expr):
             def is_tp_einsum(expr):
@@ -1517,20 +1522,22 @@ class FusionContractorArrayContext(
                     and pt.analysis.is_einsum_similar_to_subscript(
                             expr,
                             "ij,ej->ei")):
-                arg1, arg2 = expr.args
-                if not arg2.tags_of_type(pt.tags.PrefixNamed):
-                    arg2 = arg2.tagged(pt.tags.PrefixNamed("input_vec"))
-                if not arg2.tags_of_type(pt.tags.ImplStored):
-                    arg2 = arg2.tagged(pt.tags.ImplStored())
+                mat, vec = expr.args
+                if mat.tags_of_type(MassInverseOperatorTag):
+                    if not vec.tags_of_type(pt.tags.PrefixNamed):
+                        vec = vec.tagged(pt.tags.PrefixNamed("input_vec"))
+                    if not vec.tags_of_type(pt.tags.ImplStored):
+                        vec = vec.tagged(pt.tags.ImplStored())
 
-                return expr.copy(args=(arg1, arg2))
+                return expr.copy(args=(mat, vec))
 
             elif (isinstance(expr, pt.Einsum) and is_tp_einsum(expr)):
                 mat, vec = expr.args
-                if not vec.tags_of_type(pt.tags.PrefixNamed):
-                    vec = vec.tagged(pt.tags.PrefixNamed("input_vec_tp"))
-                if not vec.tags_of_type(pt.tags.ImplStored):
-                    vec = vec.tagged(pt.tags.ImplStored())
+                if mat.tags_of_type(TensorProductMassInverseOperatorTag):
+                    if not vec.tags_of_type(pt.tags.PrefixNamed):
+                        vec = vec.tagged(pt.tags.PrefixNamed("input_vec_tp"))
+                    if not vec.tags_of_type(pt.tags.ImplStored):
+                        vec = vec.tagged(pt.tags.ImplStored())
 
                 return expr.copy(args=(mat, vec))
 
