@@ -349,6 +349,9 @@ class TracePair:
     interior: ArrayContainer
     exterior: ArrayContainer
 
+    # NOTE: let the container do the broadcasting + arithmetic
+    __array_ufunc__ = None
+
     def __getattr__(self, name):
         return map_array_container(
                 lambda ary: getattr(ary, name),
@@ -458,6 +461,9 @@ class WaveState:
     u: DOFArray
     v: np.ndarray  # [object]
 
+    # NOTE: let the container do the broadcasting + arithmetic
+    __array_ufunc__ = None
+
     def __post_init__(self):
         assert isinstance(self.v, np.ndarray) and self.v.dtype.char == "O"
 
@@ -472,6 +478,7 @@ def main(lazy=False):
 
     cl_ctx = cl.create_some_context()
     queue = cl.CommandQueue(cl_ctx)
+    actx_outer = PyOpenCLArrayContext(queue)
     if lazy:
         actx = PytatoPyOpenCLArrayContext(queue)
     else:
